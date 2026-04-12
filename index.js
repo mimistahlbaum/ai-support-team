@@ -527,15 +527,20 @@ function isModelLimitError(error) {
 }
 
 async function askOpenRouter(systemPrompt, userPrompt) {
-  const response = await openrouter.chat.completions.create({
-    model: 'openrouter/free',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-  });
+  try {
+    const response = await openrouter.chat.completions.create({
+      model: 'openrouter/free',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    });
 
-  return response.choices?.[0]?.message?.content || '(no response)';
+    return response.choices?.[0]?.message?.content || '(no response)';
+  } catch (error) {
+    console.error('askOpenRouter error:', error?.message || error);
+    return `OpenRouter error: ${error?.message || 'unknown error'}`;
+  }
 }
 
 async function safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject) {
