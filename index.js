@@ -1496,22 +1496,35 @@ coordinator.on('interactionCreate', async interaction => {
         `Initial request:\n${prompt}`
       );
 
-      await interaction.editReply(`専用チャンネル作成: ${channel}`);
+      await interaction.editReply(`専用チャンネルを作成しました: ${channel}`);
 
       const startText = `新しいタスクを開始します。
-Type: ${taskType}
-Title: ${title}
+      Type: ${taskType}
+      Title: ${title}
 
-ここからチームが自律的に会議して、必要なら実行まで進めます。`;
+      ここからチームが自律的に会議して、必要なら実行まで進めます。`;
 
-      await sendAsBot(coordinator, channel.id, startText, 'Coordinator');
-      appendHistory(channel.id, 'Coordinator', 'control', startText);
+      setTimeout(async () => {
+        try {
+          await sendAsBot(coordinator, channel.id, startText, 'Coordinator');
+          appendHistory(channel.id, 'Coordinator', 'control', startText);
 
-      await runDynamicMeeting(channel, prompt, 'start');
-    } catch (error) {
-      console.error(error);
-      await interaction.editReply(`エラー: ${error.message}`);
+          await runDynamicMeeting(channel, prompt, 'start');
+        } catch (error) {
+          console.error(error);
+
+          try {
+          await sendAsBot(
+          coordinator,
+          channel.id,
+          `処理中にエラーが発生しました: ${error.message}`,
+          'Coordinator'
+        );
+        } catch (innerError) {
+          console.error('Failed to send error message to task channel:', innerError);
+        }
     }
+  }, 0);
 
     return;
   }
