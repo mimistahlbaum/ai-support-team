@@ -13,6 +13,7 @@ import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
 import http from 'http';
+import { Client as NotionClient } from '@notionhq/client';
 
 const {
   DISCORD_GUILD_ID,
@@ -36,6 +37,8 @@ const {
   GROQ_API_KEY,
   OPENROUTER_API_KEY,
   TAVILY_API_KEY,
+  NOTION_KEY,
+  NOTION_PAGE_ID,
 
   SUPABASE_URL,
   SUPABASE_ANON_KEY,
@@ -63,6 +66,7 @@ if (
   !GROQ_API_KEY ||
   !OPENROUTER_API_KEY ||
   !TAVILY_API_KEY ||
+  !NOTION_KEY ||
 
   !SUPABASE_URL ||
   !SUPABASE_ANON_KEY
@@ -88,6 +92,10 @@ const openrouter = new OpenAI({
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const PORT = process.env.PORT || 10000;
+
+const notion = new NotionClient({
+  auth: NOTION_KEY,
+});
 
 const healthServer = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -262,6 +270,49 @@ async function saveUserProfile() {
   } catch (error) {
     console.error('Failed to save user profile:', error);
   }
+}
+
+async function notionSearch(query) {
+  try {
+    const response = await notion.search({
+      query,
+      page_size: 10,
+    });
+
+    return response.results || [];
+  } catch (error) {
+    console.error('Notion search failed:', error.message);
+    return [];
+  }
+}
+
+async function notionRetrievePage(pageId) {
+  try {
+    return await notion.pages.retrieve({ page_id: pageId });
+  } catch (error) {
+    console.error('Notion page retrieve failed:', error.message);
+    return null;
+  }
+}
+
+function formatNotionSearchResults(results) {
+  if (!results.length) {
+    return 'No Notion results found.';
+  }
+
+  return results
+    .map((item, index) => {
+      const title =
+        item.object === 'page'
+          ? (item.properties?.title?.title?.[0]?.plain_text ||
+             item.properties?.Name?.title?.[0]?.plain_text ||
+             item.url ||
+             'Untitled page')
+          : item.url || 'Untitled';
+
+      return `${index + 1}. ${title}\n${item.url || ''}`;
+    })
+    .join('\n\n');
 }
 
 function safeChannelName(title) {
@@ -840,8 +891,12 @@ query: ${decision.query || '(none)'}`;
       finalText += `\n\n既存の検索結果を再利用します。`;
     } else {
       const query = decision.query || instruction || task.prompt;
-      const evidence = await searchTavily(query);
-      task.scoutEvidence = evidence;
+      const webEvidence = await searchTavily(query);
+      const notionResults = await notionSearch(query);
+      const notionEvidence = formatNotionSearchResults(notionResults);
+
+const evidence = `Web results:\n${webEvidence}\n\nNotion results:\n${notionEvidence}`;
+task.scoutEvidence = evidence;
       saveTaskMemory();
 
       finalText += `\n\n検索結果:\n${evidence}`;
