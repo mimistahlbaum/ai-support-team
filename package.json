@@ -1,0 +1,23 @@
+{
+  "name": "ai-groupchat-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.88.0",
+    "@google-cloud/local-auth": "^3.0.1",
+    "@google/genai": "^1.49.0",
+    "@supabase/supabase-js": "^2.103.0",
+    "discord.js": "^14.26.2",
+    "dotenv": "^17.4.1",
+    "googleapis": "^171.4.0",
+    "openai": "^6.34.0"
+  }
+}

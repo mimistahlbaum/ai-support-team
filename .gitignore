@@ -1,0 +1,8 @@
+.env
+node_modules
+google_token.json
+task_memory.json
+credentials.json
+user_profile.json
+drive-test.js
+migrate-local-to-supabase.js
