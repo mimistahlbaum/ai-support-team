@@ -1555,7 +1555,7 @@ coordinator.on('messageCreate', async message => {
       }
 
       const content = message.content.trim();
-      const prompt = content.replace(/^!(run|continue)\s+/i, '').trim();
+      const prompt = content.replace(/^!(run|continue)(?:\s+|$)/i, '').trim();
       if (!prompt) {
         await sendAsBot(coordinator, message.channel.id, '指示文が空です。`!continue <指示>` 形式で送ってください。', 'Coordinator');
         return;
