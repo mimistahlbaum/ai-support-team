@@ -1,38 +1,56 @@
 # AI Chat Support Group Bot
 
-## 概要
+5 bot 構成（Scout / Spark / Forge / Mirror / Coordinator）で Discord 内の相談を自律会議に変換し、タスク実行まで進める bot です。通常運用時の永続化先は **Supabase (`bot_storage`) のみ** です。
 
-このリポジトリは、Discord 上で **5 bot 構成**（Scout / Spark / Forge / Mirror / Coordinator）で自律会議を回し、タスク整理・意思決定・継続実行を支援する bot 群です。
-
-主な特徴:
-- 通常メッセージから新規 task channel を自動生成
-- `/starttask`, `/continue`, `/resume`, `/finish` を使った会議運用
-- `task_memory` / `user_profile` を Supabase (`bot_storage`) に永続化
-- `task_memory.json` / `user_profile.json` は初回移行時の fallback 読み込み専用
-- `task_memory.backup.json` / `user_profile.backup.json` は手動バックアップ用途
-- health server (`GET /`, `GET /health`) を `PORT` で待受
+- task channel 自動生成（通常メッセージ起点）
+- `/starttask`, `/continue`, `/resume`, `/finish`
+- 永続化キー: `task_memory`, `user_profile`
+- `GET /` と `GET /health` の health endpoint を `PORT` で公開
 
 ---
 
-## セットアップ
+## Render での運用（最優先）
 
-### 1) 依存パッケージのインストール
+### Render Web Service 設定
 
-```bash
-npm install
-```
+- **Repository**: `mimistahlbaum/ai-chat-support-group`
+- **Branch**: `main`
+- **Root Directory**: リポジトリルート（空欄）
+- **Build Command**: `npm install --omit=dev`
+- **Start Command**: `npm run render-start`（`npm start` でも可）
+- **Health Check Path**: `/health`
 
-### 2) `.env` の準備
+### 必須 Environment Variables
 
-`.env.example` をコピーして `.env` を作成し、値を埋めてください。
+`.env.example` の必須項目を Render の Environment に設定してください。
 
-```bash
-cp .env.example .env
-```
+- `DISCORD_GUILD_ID`
+- `SCOUT_BOT_TOKEN`, `SCOUT_CLIENT_ID`
+- `SPARK_BOT_TOKEN`, `SPARK_CLIENT_ID`
+- `FORGE_BOT_TOKEN`, `FORGE_CLIENT_ID`
+- `MIRROR_BOT_TOKEN`, `MIRROR_CLIENT_ID`
+- `COORDINATOR_BOT_TOKEN`, `COORDINATOR_CLIENT_ID`
+- `GROQ_API_KEY`
+- `TAVILY_API_KEY`
+- `NOTION_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
 
-### 3) Supabase テーブル作成
+任意:
+- `TASK_ADMIN_ROLE_ID`（task channel 追加アクセス制御）
+- `PORT`（Render では通常自動設定。ローカル既定値は `10000`）
 
-Supabase SQL Editor で以下を実行してください。
+### Render の sleep / restart 後の挙動
+
+- アプリ起動時に Supabase から `task_memory` / `user_profile` を再読込します。
+- Supabase 読込に失敗した場合のみ migration fallback (`task_memory.json`, `user_profile.json`) を試します。
+- Discord 接続断が起きても shard イベントをログ出しし、再接続の状態を追えるようにしています。
+
+---
+
+## Supabase
+
+### 1) `bot_storage` テーブル作成 SQL
 
 ```sql
 create table if not exists bot_storage (
@@ -42,94 +60,70 @@ create table if not exists bot_storage (
 );
 ```
 
-### 4) 初回 migration 実行
-
-ローカル JSON（`task_memory.json`, `user_profile.json`）がある場合は、起動前に migration を実行してください。
+### 2) ローカル JSON から migration
 
 ```bash
-node migrate-local-to-supabase.js
+npm run migrate:supabase
 ```
 
-### 5) 起動
+- `task_memory.json` / `user_profile.json` が存在する場合のみ読み込みます。
+- Supabase 側に既存キーがある場合は上書き警告を表示します。
+
+### 3) JSON ファイルの役割（通常運用では非メイン）
+
+- `task_memory.json` / `user_profile.json`: **migration fallback 読み込み専用**
+- `task_memory.backup.json` / `user_profile.backup.json`: **manual backup 書き込み先**
+- 通常の保存先は Supabase のみ
+
+---
+
+## ローカル開発
 
 ```bash
+npm install
+cp .env.example .env
 npm start
 ```
 
 ---
 
-## Supabase SQL
+## Docker / TNAS（参考情報）
 
-```sql
-create table if not exists bot_storage (
-  key text primary key,
-  value jsonb not null,
-  updated_at timestamptz not null default now()
-);
-```
-
----
-
-## 初回移行手順
-
-1. `task_memory.json` / `user_profile.json` を用意（旧環境からコピー）。
-2. `.env` を設定（`SUPABASE_URL`, `SUPABASE_ANON_KEY` を含む）。
-3. `node migrate-local-to-supabase.js` を実行。
-4. Supabase の `bot_storage` に `task_memory`, `user_profile` が入ったことを確認。
-5. 以後、通常運用の保存先は Supabase のみを使用。
-6. `task_memory.json` / `user_profile.json` は migration fallback 読み込み専用として保持。
-7. `*.backup.json` は manual backup 書き込み先として使用。
-
----
-
-## Docker / TNAS
-
-### 起動（ビルド込み）
+本リポジトリには `Dockerfile` / `docker-compose.yml` を残していますが、**現行の第一運用は Render** です。Docker/TNAS は参考・将来用の位置づけです。
 
 ```bash
 docker compose up -d --build
-```
-
-### ログ確認
-
-```bash
 docker compose logs -f
-```
-
-### 停止
-
-```bash
 docker compose down
 ```
 
-### 再起動
-
-```bash
-docker compose restart
-```
-
-`docker-compose.yml` はローカル JSON を永続 volume としてマウントしていません。通常運用の永続化は Supabase のみを使用します（ローカル JSON は fallback / manual backup のみ）。
-
 ---
 
-## トラブルシュート
+## Troubleshooting
 
-### 1) env が足りない
-- 起動時に `Missing required env vars.` で終了します。
-- `.env` の必須キー（特に Discord 各 token / client id、Supabase、API keys）を確認してください。
+### Missing required env vars
 
-### 2) Discord login 失敗
-- token / client id の取り違え、Bot 権限不足、Guild 設定ミスを確認。
-- Discord Developer Portal で Intent 設定（Message Content 含む）を確認。
+起動時に `Missing required env vars.` が出る場合、必須 env の未設定です。Render 環境変数または `.env` を再確認してください。
 
-### 3) Supabase 接続失敗
-- `SUPABASE_URL`, `SUPABASE_ANON_KEY` の値とテーブル作成有無を確認。
-- RLS を有効にしている場合は、`bot_storage` への読み書きポリシーを確認。
+### Supabase 接続失敗
 
-### 4) Notion / Tavily / Groq 失敗
-- 各 API key の期限切れ、権限不足、レート制限を確認。
-- 一時障害時は bot は継続し、ログにエラー出力されます。
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY` を確認
+- `bot_storage` テーブル作成済みか確認
+- RLS 利用時は `select` / `upsert` を許可する policy を確認
 
-### 5) port 10000 使用中
-- `PORT` を変更するか、使用中プロセスを停止して再起動してください。
-- Docker 利用時は `docker-compose.yml` の ports 設定も合わせて変更してください。
+### Discord login 失敗
+
+- Bot token / client id の組み合わせミス
+- Bot 招待・権限・Intent（特に Message Content）不足
+- 起動ログの `fatal error` / bot 名付き login エラーを確認
+
+### slash commands registration failure
+
+- `COORDINATOR_CLIENT_ID` / `DISCORD_GUILD_ID` の不一致
+- Discord API 一時エラー（起動中に retry 実施）
+- 失敗時も bot 本体は継続起動（ログで確認可能）
+
+### Render sleep / restart 後に反応が不安定
+
+- Render の再起動直後は Discord 再接続完了まで数秒〜数十秒かかる場合があります。
+- `/health` が `ok` でも、Discord 側 ready ログが出るまで待ってください。

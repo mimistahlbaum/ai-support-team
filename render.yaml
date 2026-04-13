@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: ai-chat-support-group
+    runtime: node
+    plan: free
+    rootDir: .
+    buildCommand: npm install --omit=dev
+    startCommand: npm run render-start
+    healthCheckPath: /health
+    autoDeploy: true
