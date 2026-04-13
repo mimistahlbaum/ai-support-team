@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
+import http from 'http';
 import {
   Client,
   GatewayIntentBits,
@@ -9,10 +10,8 @@ import {
   SlashCommandBuilder,
   ChannelType,
 } from 'discord.js';
-import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
-import http from 'http';
 import { Client as NotionClient } from '@notionhq/client';
 
 const {
@@ -33,12 +32,9 @@ const {
   COORDINATOR_BOT_TOKEN,
   COORDINATOR_CLIENT_ID,
 
-  GEMINI_API_KEY,
   GROQ_API_KEY,
-  OPENROUTER_API_KEY,
   TAVILY_API_KEY,
   NOTION_KEY,
-  NOTION_PAGE_ID,
 
   SUPABASE_URL,
   SUPABASE_ANON_KEY,
@@ -62,9 +58,7 @@ if (
   !COORDINATOR_BOT_TOKEN ||
   !COORDINATOR_CLIENT_ID ||
 
-  !GEMINI_API_KEY ||
   !GROQ_API_KEY ||
-  !OPENROUTER_API_KEY ||
   !TAVILY_API_KEY ||
   !NOTION_KEY ||
 
@@ -75,27 +69,18 @@ if (
   process.exit(1);
 }
 
-const gemini = new GoogleGenAI({
-  apiKey: GEMINI_API_KEY,
-});
-
 const groq = new OpenAI({
   apiKey: GROQ_API_KEY,
   baseURL: 'https://api.groq.com/openai/v1',
 });
 
-const openrouter = new OpenAI({
-  apiKey: OPENROUTER_API_KEY,
-  baseURL: 'https://openrouter.ai/api/v1',
-});
-
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-const PORT = process.env.PORT || 10000;
 
 const notion = new NotionClient({
   auth: NOTION_KEY,
 });
+
+const PORT = process.env.PORT || 10000;
 
 const healthServer = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -131,34 +116,15 @@ const coordinator = new Client({
 });
 
 const DISCORD_SAFE_LIMIT = 1800;
-const MAX_DYNAMIC_TURNS = 18;
+const MAX_DYNAMIC_TURNS = 6;
 const MEMORY_FILE = path.join(process.cwd(), 'task_memory.json');
 const PROFILE_FILE = path.join(process.cwd(), 'user_profile.json');
+
+const TEXT_MODEL = 'llama-3.1-8b-instant';
+const JSON_MODEL = 'llama-3.1-8b-instant';
+
 let userProfile = {};
-
 const taskMemory = new Map();
-
-/**
- * taskMemory shape
- * {
- *   taskType: string,
- *   title: string,
- *   prompt: string,
- *   scoutEvidence: string,
- *   discussionDone: boolean,
- *   summary: string,
- *   historySummary: string,
- *   lastExecution: string,
- *   cycleCount: number,
- *   channelId?: string,
- *   history: Array<{
- *     role: string,
- *     mode: string,
- *     content: string,
- *     timestamp: string
- *   }>
- * }
- */
 
 async function saveTaskMemory() {
   try {
@@ -272,49 +238,6 @@ async function saveUserProfile() {
   }
 }
 
-async function notionSearch(query) {
-  try {
-    const response = await notion.search({
-      query,
-      page_size: 10,
-    });
-
-    return response.results || [];
-  } catch (error) {
-    console.error('Notion search failed:', error.message);
-    return [];
-  }
-}
-
-async function notionRetrievePage(pageId) {
-  try {
-    return await notion.pages.retrieve({ page_id: pageId });
-  } catch (error) {
-    console.error('Notion page retrieve failed:', error.message);
-    return null;
-  }
-}
-
-function formatNotionSearchResults(results) {
-  if (!results.length) {
-    return 'No Notion results found.';
-  }
-
-  return results
-    .map((item, index) => {
-      const title =
-        item.object === 'page'
-          ? (item.properties?.title?.title?.[0]?.plain_text ||
-             item.properties?.Name?.title?.[0]?.plain_text ||
-             item.url ||
-             'Untitled page')
-          : item.url || 'Untitled';
-
-      return `${index + 1}. ${title}\n${item.url || ''}`;
-    })
-    .join('\n\n');
-}
-
 function safeChannelName(title) {
   return `task-${title}`
     .toLowerCase()
@@ -384,14 +307,14 @@ function ensureTask(channelId, taskType, title, prompt) {
       title,
       prompt,
       scoutEvidence: '',
-      discussionDone: false,
       summary: '',
       historySummary: '',
       lastExecution: '',
       cycleCount: 0,
+      channelId,
       history: [],
     });
-    saveTaskMemory();
+    void saveTaskMemory();
   }
   return taskMemory.get(channelId);
 }
@@ -422,7 +345,7 @@ function appendHistory(channelId, role, mode, content) {
   void saveTaskMemory();
 }
 
-function buildHistoryContext(channelId, maxItems = 14) {
+function buildHistoryContext(channelId, maxItems = 10) {
   const task = taskMemory.get(channelId);
   if (!task || !Array.isArray(task.history) || task.history.length === 0) {
     return 'No prior history.';
@@ -468,6 +391,40 @@ function taskTypeHint(taskType) {
   return hints[taskType] || hints.general;
 }
 
+async function notionSearch(query) {
+  try {
+    const response = await notion.search({
+      query,
+      page_size: 10,
+    });
+
+    return response.results || [];
+  } catch (error) {
+    console.error('Notion search failed:', error.message);
+    return [];
+  }
+}
+
+function formatNotionSearchResults(results) {
+  if (!results.length) {
+    return 'No Notion results found.';
+  }
+
+  return results
+    .map((item, index) => {
+      const title =
+        item.object === 'page'
+          ? (item.properties?.title?.title?.[0]?.plain_text ||
+             item.properties?.Name?.title?.[0]?.plain_text ||
+             item.url ||
+             'Untitled page')
+          : item.url || 'Untitled';
+
+      return `${index + 1}. ${title}\n${item.url || ''}`;
+    })
+    .join('\n\n');
+}
+
 async function searchTavily(query) {
   try {
     const res = await fetch('https://api.tavily.com/search', {
@@ -510,7 +467,6 @@ async function searchTavily(query) {
     return `Scout error: ${error.message}`;
   }
 }
-
 function isModelLimitError(error) {
   const msg = String(error?.message || '').toLowerCase();
 
@@ -531,27 +487,28 @@ function isModelLimitError(error) {
   );
 }
 
-async function askOpenRouter(systemPrompt, userPrompt) {
-  try {
-    const response = await openrouter.chat.completions.create({
-      model: 'openrouter/free',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-    });
-
-    return response.choices?.[0]?.message?.content || '(no response)';
-  } catch (error) {
-    console.error('askOpenRouter error:', error?.message || error);
-    return `OpenRouter error: ${error?.message || 'unknown error'}`;
-  }
+function isProviderFailureText(text) {
+  const msg = String(text || '').toLowerCase();
+  return (
+    msg.includes('groq error:') ||
+    msg.includes('scout error:') ||
+    msg.includes('model temporarily unavailable') ||
+    msg.includes('provider unavailable')
+  );
 }
 
-async function askGroq(systemPrompt, userPrompt) {
+async function askGroq(systemPrompt, userPrompt, options = {}) {
+  const {
+    model = TEXT_MODEL,
+    temperature = 0.6,
+    max_tokens = 900,
+  } = options;
+
   try {
     const response = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model,
+      temperature,
+      max_tokens,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -561,6 +518,11 @@ async function askGroq(systemPrompt, userPrompt) {
     return response.choices?.[0]?.message?.content || '(no response)';
   } catch (error) {
     console.error('askGroq error:', error?.message || error);
+
+    if (isModelLimitError(error)) {
+      return 'Groq error: model temporarily unavailable or rate-limited. Please stop and try later.';
+    }
+
     return `Groq error: ${error?.message || 'unknown error'}`;
   }
 }
@@ -568,7 +530,9 @@ async function askGroq(systemPrompt, userPrompt) {
 async function safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject) {
   try {
     const response = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model: JSON_MODEL,
+      temperature: 0.2,
+      max_tokens: 500,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -579,10 +543,7 @@ async function safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject) {
     const match = raw.match(/\{[\s\S]*\}/);
     return JSON.parse(match ? match[0] : '{}');
   } catch (error) {
-    if (isModelLimitError(error)) {
-      return fallbackObject;
-    }
-
+    console.error('safeJsonFromGroq error:', error?.message || error);
     return fallbackObject;
   }
 }
@@ -591,7 +552,7 @@ async function updateHistorySummary(channelId) {
   const task = taskMemory.get(channelId);
   if (!task) return;
 
-  const historyContext = buildHistoryContext(channelId, 20);
+  const historyContext = buildHistoryContext(channelId, 14);
 
   const systemPrompt = `
 あなたは Memory Summariser です。
@@ -605,7 +566,7 @@ async function updateHistorySummary(channelId) {
 5. 次に重要なこと
 
 冗長な説明や雑談は入れないでください。
-200〜400語程度で十分です。
+150〜300語程度で十分です。
 `;
 
   const userPrompt = `
@@ -622,43 +583,31 @@ history:
 ${historyContext}
 `;
 
-  try {
-    const response = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-    });
+  const text = await askGroq(systemPrompt, userPrompt, {
+    model: TEXT_MODEL,
+    temperature: 0.3,
+    max_tokens: 500,
+  });
 
-    const text = response.choices?.[0]?.message?.content || '';
+  if (!isProviderFailureText(text)) {
     task.historySummary = text;
-    saveTaskMemory();
-  } catch (error) {
-    if (isModelLimitError(error)) {
-      try {
-        const text = await askOpenRouter(systemPrompt, userPrompt);
-        task.historySummary = text;
-        saveTaskMemory();
-      } catch {
-        // ignore
-      }
-    }
+    void saveTaskMemory();
   }
 }
 
 const sparkSystem = `
 あなたの名前は Spark です。
 役割は発想と方向性整理です。
-方向性、複数案、世界観、優先順位を考えてください。
+方向性、複数案、優先順位を考えてください。
 Scout の検索結果がある場合のみ事実として使ってください。
 同じ一般論を繰り返さず、新しく決めるべき点を優先してください。
+短くてもいいので、次に進む材料になる提案を出してください。
 `;
 
 const forgeSystem = `
 あなたの名前は Forge です。
-役割は実務面の検討と問題点指摘、必要時の完成物作成です。
-相談フェーズでは、実務上の成立性、必要素材、必要工程、足りない情報、危険な前提を指摘してください。
+役割は実務面の検討と必要時の完成物作成です。
+相談フェーズでは、実務上の成立性、必要素材、必要工程、足りない情報を指摘してください。
 実行フェーズでは、そのまま使える文案、手順、テンプレ、コードなどの完成形を出してください。
 Scout の検索結果がある場合のみ事実として使ってください。
 `;
@@ -670,7 +619,7 @@ const mirrorSystem = `
 1. 重複していること
 2. 抜けていること
 3. 次に誰が何をすべきか
-4. まだ完了ではない理由があるなら何か
+4. まだ完了ではない理由
 を簡潔に出してください。
 `;
 
@@ -696,9 +645,8 @@ async function askScoutSearchDecision(taskType, prompt, existingEvidence = '') {
 2. 既存の検索結果で足りるなら canUseExistingEvidence = true
 3. 既存結果が古い、ズレている、無関係、または不足しているなら needFreshSearch = true
 4. 発想、構成、文章改善、一般的整理だけで足りるなら needSearch = false
-5. 事実確認なしで進めるとハルシネーションの危険が高いなら needSearch = true
-6. query は、検索が必要な場合のみ具体的に書く
-7. 推測で埋めない
+5. query は、検索が必要な場合のみ具体的に書く
+6. 推測で埋めない
 
 必ず JSON だけを返してください。
 形式:
@@ -727,11 +675,11 @@ ${buildUserProfileContext()}
 `;
 
   const fallbackObject = {
-    needSearch: true,
-    needFreshSearch: !existingEvidence,
+    needSearch: false,
+    needFreshSearch: false,
     canUseExistingEvidence: Boolean(existingEvidence),
     reason: 'Fallback decision',
-    query: prompt,
+    query: '',
     confidence: 'low',
   };
 
@@ -748,7 +696,7 @@ ${buildUserProfileContext()}
 }
 
 async function askCoordinatorNextStep(task, latestUserPrompt, turnCount) {
-  const historyContext = buildHistoryContext(task.channelId, 16);
+  const historyContext = buildHistoryContext(task.channelId, 10);
   const historySummary = task.historySummary || 'No summary.';
   const scoutEvidence = task.scoutEvidence || '検索なし';
 
@@ -770,9 +718,8 @@ async function askCoordinatorNextStep(task, latestUserPrompt, turnCount) {
 4. 重複整理、抜け確認、完了判定前の整理が必要なら Mirror
 5. タスクが十分完了しているなら nextSpeaker = "none" かつ taskComplete = true
 6. 不要な繰り返しは避ける
-7. 毎回全員を回す必要はない
-8. 具体的な nextInstruction を書く
-9. mode は "discussion" または "execution"
+7. mode は "discussion" または "execution"
+8. 次の担当への具体的指示を書く
 
 必ず JSON だけを返してください。
 形式:
@@ -815,7 +762,7 @@ ${turnCount}
 `;
 
   const fallbackObject = {
-    nextSpeaker: 'Mirror',
+    nextSpeaker: 'none',
     taskComplete: true,
     mode: 'discussion',
     reason: 'Fallback completion',
@@ -834,7 +781,7 @@ ${turnCount}
 }
 
 async function askCoordinatorFinalSummary(task, latestUserPrompt) {
-  const historyContext = buildHistoryContext(task.channelId, 18);
+  const historyContext = buildHistoryContext(task.channelId, 12);
   const historySummary = task.historySummary || 'No summary.';
 
   const userPrompt = `
@@ -860,26 +807,15 @@ ${historySummary}
 ${historyContext}
 `;
 
-  try {
-    const response = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        { role: 'system', content: coordinatorSystem },
-        { role: 'user', content: userPrompt },
-      ],
-    });
-
-    return response.choices?.[0]?.message?.content || '(no response)';
-  } catch (error) {
-    if (isModelLimitError(error)) {
-      return await askGroq(coordinatorSystem, userPrompt);
-    }
-    return `Coordinator error: ${error.message}`;
-  }
+  return await askGroq(coordinatorSystem, userPrompt, {
+    model: TEXT_MODEL,
+    temperature: 0.4,
+    max_tokens: 700,
+  });
 }
 
 async function askAgentResponse(role, instruction, task, mode) {
-  const historyContext = buildHistoryContext(task.channelId, 14);
+  const historyContext = buildHistoryContext(task.channelId, 10);
   const historySummary = task.historySummary || 'No summary.';
   const scoutEvidence = task.scoutEvidence || '検索なし';
 
@@ -914,9 +850,9 @@ query: ${decision.query || '(none)'}`;
       const notionResults = await notionSearch(query);
       const notionEvidence = formatNotionSearchResults(notionResults);
 
-const evidence = `Web results:\n${webEvidence}\n\nNotion results:\n${notionEvidence}`;
-task.scoutEvidence = evidence;
-      saveTaskMemory();
+      const evidence = `Web results:\n${webEvidence}\n\nNotion results:\n${notionEvidence}`;
+      task.scoutEvidence = evidence;
+      void saveTaskMemory();
 
       finalText += `\n\n検索結果:\n${evidence}`;
     }
@@ -924,8 +860,7 @@ task.scoutEvidence = evidence;
     return finalText;
   }
 
-  if (role === 'Spark') {
-    const userPrompt = `
+  const basePrompt = `
 タスク種別:
 ${task.taskType}
 
@@ -951,114 +886,39 @@ ${instruction}
 ${mode}
 `;
 
-    try {
-      const response = await gemini.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `${sparkSystem}\n\n${userPrompt}`,
-      });
-
-      return response.text || '(no response)';
-    } catch (error) {
-      if (isModelLimitError(error)) {
-        return await askGroq(sparkSystem, userPrompt);
-      }
-      return `Spark error: ${error.message}`;
-    }
+  if (role === 'Spark') {
+    return await askGroq(sparkSystem, basePrompt, {
+      model: TEXT_MODEL,
+      temperature: 0.7,
+      max_tokens: 700,
+    });
   }
 
   if (role === 'Forge') {
-    const userPrompt = `
-タスク種別:
-${task.taskType}
-
-補足:
-${taskTypeHint(task.taskType)}
-
-ユーザープロフィール:
-${buildUserProfileContext()}
-
-圧縮された過去要約:
-${historySummary}
-
-過去ログ:
-${historyContext}
-
-Scout の検索結果:
-${scoutEvidence}
+    return await askGroq(
+      forgeSystem,
+      `${basePrompt}
 
 前回までの要約:
-${task.summary || 'なし'}
-
-Coordinator instruction:
-${instruction}
-
-現在モード:
-${mode}
-`;
-
-    try {
-      const response = await groq.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          { role: 'system', content: forgeSystem },
-          { role: 'user', content: userPrompt },
-        ],
-      });
-
-      return response.choices?.[0]?.message?.content || '(no response)';
-    } catch (error) {
-      if (isModelLimitError(error)) {
-        return await askGroq(forgeSystem, userPrompt);
+${task.summary || 'なし'}`,
+      {
+        model: TEXT_MODEL,
+        temperature: 0.5,
+        max_tokens: 900,
       }
-      return `Forge error: ${error.message}`;
-    }
+    );
   }
 
   if (role === 'Mirror') {
-    const userPrompt = `
-タスク種別:
-${task.taskType}
-
-補足:
-${taskTypeHint(task.taskType)}
-
-ユーザープロフィール:
-${buildUserProfileContext()}
-
-圧縮された過去要約:
-${historySummary}
-
-過去ログ:
-${historyContext}
-
-Scout の検索結果:
-${scoutEvidence}
-
-Coordinator instruction:
-${instruction}
-
-現在モード:
-${mode}
-`;
-
-    try {
-      const response = await gemini.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `${mirrorSystem}\n\n${userPrompt}`,
-      });
-
-      return response.text || '(no response)';
-    } catch (error) {
-      if (isModelLimitError(error)) {
-        return await askGroq(mirrorSystem, userPrompt);
-      }
-      return `Mirror error: ${error.message}`;
-    }
+    return await askGroq(mirrorSystem, basePrompt, {
+      model: TEXT_MODEL,
+      temperature: 0.4,
+      max_tokens: 700,
+    });
   }
 
   return '(no response)';
 }
-
 function roleClient(role) {
   if (role === 'Scout') return scout;
   if (role === 'Spark') return spark;
@@ -1082,13 +942,13 @@ async function runDynamicMeeting(channel, latestUserPrompt, invocationMode) {
 
   task.channelId = channel.id;
   task.cycleCount = 0;
-  saveTaskMemory();
+  void saveTaskMemory();
 
   await updateHistorySummary(channel.id);
 
-  while (task.cycleCount < MAX_DYNAMIC_TURNS) {
-    task.cycleCount += 1;
-    saveTaskMemory();
+  for (let turn = 1; turn <= MAX_DYNAMIC_TURNS; turn++) {
+    task.cycleCount = turn;
+    void saveTaskMemory();
 
     const next = await askCoordinatorNextStep(
       task,
@@ -1113,8 +973,8 @@ nextInstruction: ${next.nextInstruction || '(none)'}`;
       appendHistory(channel.id, 'Coordinator', 'summary', finalSummary);
 
       task.summary = finalSummary;
-      saveTaskMemory();
       await updateHistorySummary(channel.id);
+      void saveTaskMemory();
       return;
     }
 
@@ -1126,15 +986,22 @@ nextInstruction: ${next.nextInstruction || '(none)'}`;
     await sendAsBot(roleClient(speaker), channel.id, output, speaker);
     appendHistory(channel.id, speaker, mode, output);
 
-    if (speaker === 'Forge' && mode === 'execution') {
-      task.lastExecution = output;
-      saveTaskMemory();
+    if (isProviderFailureText(output)) {
+      const stopText =
+        'モデル側の混雑または利用上限に当たりました。ここで停止します。しばらく待ってから /continue または /resume を使ってください。';
+      await sendAsBot(coordinator, channel.id, stopText, 'Coordinator');
+      appendHistory(channel.id, 'Coordinator', 'control', stopText);
+      return;
     }
 
-    await updateHistorySummary(channel.id);
+    if (speaker === 'Forge' && mode === 'execution') {
+      task.lastExecution = output;
+      void saveTaskMemory();
+    }
   }
 
-  const stopText = '安全上限に達したため、ここで会議を停止します。必要なら /continue または /resume で再開してください。';
+  const stopText =
+    '安全上限に達したため、ここで会議を停止します。必要なら /continue または /resume で再開してください。';
   await sendAsBot(coordinator, channel.id, stopText, 'Coordinator');
   appendHistory(channel.id, 'Coordinator', 'control', stopText);
 }
@@ -1173,7 +1040,7 @@ ${task.lastExecution || 'なし'}`;
   appendHistory(channel.id, 'Coordinator', 'resume', resumeText);
 
   task.cycleCount = 0;
-  saveTaskMemory();
+  void saveTaskMemory();
 
   const resumePrompt = `
 保存済みメモリを踏まえて、このタスクを再開してください。
@@ -1257,11 +1124,7 @@ ${buildUserProfileContext()}
     isNewTask: false,
   };
 
-  const parsed = await safeJsonFromGroq(
-    systemPrompt,
-    userPrompt,
-    fallbackObject
-  );
+  const parsed = await safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject);
 
   return {
     shouldRespond: Boolean(parsed.shouldRespond),
@@ -1313,11 +1176,7 @@ ${buildUserProfileContext()}
     reason: 'fallback general',
   };
 
-  const parsed = await safeJsonFromGroq(
-    systemPrompt,
-    userPrompt,
-    fallbackObject
-  );
+  const parsed = await safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject);
 
   const allowed = [
     'research',
@@ -1483,142 +1342,129 @@ coordinator.once('clientReady', async () => {
 coordinator.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-if (interaction.commandName === 'starttask') {
-  const taskType = interaction.options.getString('task_type', true);
-  const title = interaction.options.getString('title', true);
-  const prompt = interaction.options.getString('prompt', true);
+  if (interaction.commandName === 'starttask') {
+    const taskType = interaction.options.getString('task_type', true);
+    const title = interaction.options.getString('title', true);
+    const prompt = interaction.options.getString('prompt', true);
 
-  await interaction.reply({
-  content: '依頼を受け取りました。専用チャンネルを作成します。',
-  flags: 64,
-});
-
-  try {
-    const guild = interaction.guild;
-    if (!guild) {
-      await interaction.editReply('Guild not found.');
-      return;
-    }
-
-    const channel = await guild.channels.create({
-      name: safeChannelName(title),
-      type: ChannelType.GuildText,
-      topic: `Task channel for ${taskType}: ${title}`,
-      reason: `Task requested by ${interaction.user.tag}`,
+    await interaction.reply({
+      content: '依頼を受け取りました。専用チャンネルを作成します。',
+      flags: 64,
     });
 
-    const task = ensureTask(channel.id, taskType, title, prompt);
-    task.channelId = channel.id;
-    await saveTaskMemory();
+    queueMicrotask(async () => {
+      try {
+        const guild = interaction.guild;
+        if (!guild) {
+          console.error('starttask background error: guild not found');
+          return;
+        }
 
-    appendHistory(
-      channel.id,
-      'User',
-      'discussion',
-      `Initial request:\n${prompt}`
-    );
+        const channel = await guild.channels.create({
+          name: safeChannelName(title),
+          type: ChannelType.GuildText,
+          topic: `Task channel for ${taskType}: ${title}`,
+          reason: `Task requested by ${interaction.user.tag}`,
+        });
 
-    await interaction.editReply(`専用チャンネルを作成しました: ${channel}`);
+        const task = ensureTask(channel.id, taskType, title, prompt);
+        task.channelId = channel.id;
+        void saveTaskMemory();
 
-    const startText = `新しいタスクを開始します。
+        appendHistory(
+          channel.id,
+          'User',
+          'discussion',
+          `Initial request:\n${prompt}`
+        );
+
+        const startText = `新しいタスクを開始します。
 
 Type: ${taskType}
 Title: ${title}
 
 ここからチームが自律的に会議して、必要なら実行まで進めます。`;
 
-    queueMicrotask(async () => {
-      try {
         await channel.send(startText);
         appendHistory(channel.id, 'Coordinator', 'control', startText);
+
         await runDynamicMeeting(channel, prompt, 'start');
       } catch (error) {
         console.error('starttask background error:', error);
-
-        try {
-          await channel.send(`処理中にエラーが発生しました: ${error.message}`);
-        } catch (innerError) {
-          console.error('failed to send task-channel error:', innerError);
-        }
       }
     });
-  } catch (error) {
-    console.error('starttask error:', error);
 
-    try {
-      await interaction.editReply(`エラー: ${error.message}`);
-    } catch (replyError) {
-      console.error('failed to edit starttask reply:', replyError);
-    }
+    return;
   }
-
-  return;
-}
 
   if (interaction.commandName === 'continue') {
     const prompt = interaction.options.getString('prompt', true);
 
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.reply({
+      content: '追加の自律会議を開始します。',
+      flags: 64,
+    });
 
-    try {
-      if (
-        !interaction.channel ||
-        interaction.channel.type !== ChannelType.GuildText
-      ) {
-        await interaction.editReply('タスクチャンネル内で使って。');
-        return;
+    queueMicrotask(async () => {
+      try {
+        if (
+          !interaction.channel ||
+          interaction.channel.type !== ChannelType.GuildText
+        ) {
+          return;
+        }
+
+        const task = getTask(interaction.channel.id);
+        if (!task) {
+          await interaction.channel.send('このチャンネルにタスク情報がありません。');
+          return;
+        }
+
+        task.cycleCount = 0;
+        void saveTaskMemory();
+
+        appendHistory(
+          interaction.channel.id,
+          'User',
+          'execution',
+          `User follow-up:\n${prompt}`
+        );
+
+        await runDynamicMeeting(interaction.channel, prompt, 'continue');
+      } catch (error) {
+        console.error('continue background error:', error);
       }
-
-      const task = getTask(interaction.channel.id);
-      if (!task) {
-        await interaction.editReply('このチャンネルにタスク情報がありません。');
-        return;
-      }
-
-      task.cycleCount = 0;
-      saveTaskMemory();
-
-      appendHistory(
-        interaction.channel.id,
-        'User',
-        'execution',
-        `User follow-up:\n${prompt}`
-      );
-
-      await interaction.editReply('追加の自律会議を開始します。');
-      await runDynamicMeeting(interaction.channel, prompt, 'continue');
-    } catch (error) {
-      console.error(error);
-      await interaction.editReply(`エラー: ${error.message}`);
-    }
+    });
 
     return;
   }
 
   if (interaction.commandName === 'resume') {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.reply({
+      content: '保存済みメモリから再開します。',
+      flags: 64,
+    });
 
-    try {
-      if (
-        !interaction.channel ||
-        interaction.channel.type !== ChannelType.GuildText
-      ) {
-        await interaction.editReply('タスクチャンネル内で使って。');
-        return;
+    queueMicrotask(async () => {
+      try {
+        if (
+          !interaction.channel ||
+          interaction.channel.type !== ChannelType.GuildText
+        ) {
+          return;
+        }
+
+        const task = getTask(interaction.channel.id);
+        if (!task) {
+          await interaction.channel.send('このチャンネルに保存済みタスク情報がありません。');
+          return;
+        }
+
+        await runResume(interaction.channel);
+      } catch (error) {
+        console.error('resume background error:', error);
       }
-
-      const task = getTask(interaction.channel.id);
-      if (!task) {
-        await interaction.editReply('このチャンネルに保存済みタスク情報がありません。');
-        return;
-      }
-
-      await interaction.editReply('保存済みメモリから再開します。');
-      await runResume(interaction.channel);
-    } catch (error) {
-      console.error(error);
-      await interaction.editReply(`エラー: ${error.message}`);
-    }
+    });
 
     return;
   }
@@ -1628,13 +1474,20 @@ Title: ${title}
       !interaction.channel ||
       interaction.channel.type !== ChannelType.GuildText
     ) {
-      await interaction.reply('通常のタスクチャンネル内で使って。');
+      await interaction.reply({
+        content: '通常のタスクチャンネル内で使って。',
+        flags: 64,
+      });
       return;
     }
 
     taskMemory.delete(interaction.channel.id);
-    saveTaskMemory();
-    await interaction.reply('タスク終了。');
+    void saveTaskMemory();
+
+    await interaction.reply({
+      content: 'タスク終了。',
+      flags: 64,
+    });
   }
 });
 
@@ -1662,7 +1515,7 @@ coordinator.on('messageCreate', async message => {
       }
 
       task.cycleCount = 0;
-      saveTaskMemory();
+      void saveTaskMemory();
 
       appendHistory(
         message.channel.id,
