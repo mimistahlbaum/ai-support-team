@@ -1542,65 +1542,6 @@ Title: ${title}
 
   return;
 }
-    const channel = await guild.channels.create({
-      name: safeChannelName(title),
-      type: ChannelType.GuildText,
-      topic: `Task channel for ${taskType}: ${title}`,
-      reason: `Task requested by ${interaction.user.tag}`,
-    });
-
-    const task = ensureTask(channel.id, taskType, title, prompt);
-    task.channelId = channel.id;
-    saveTaskMemory();
-
-    appendHistory(
-      channel.id,
-      'User',
-      'discussion',
-      `Initial request:\n${prompt}`
-    );
-
-    await interaction.editReply(`専用チャンネルを作成しました: ${channel}`);
-
-    const startText = `新しいタスクを開始します。`;
-Type: ${taskType}
-Title: ${title}
-
-ここからチームが自律的に会議して、必要なら実行まで進めます。`;
-
-    setTimeout(async () => {
-      try {
-        await sendAsBot(coordinator, channel.id, startText, 'Coordinator');
-        appendHistory(channel.id, 'Coordinator', 'control', startText);
-
-        await runDynamicMeeting(channel, prompt, 'start');
-      } catch (error) {
-        console.error(error);
-
-        try {
-          await sendAsBot(
-            coordinator,
-            channel.id,
-            `処理中にエラーが発生しました: ${error.message}`,
-            'Coordinator'
-          );
-        } catch (innerError) {
-          console.error('Failed to send error message to task channel:', innerError);
-        }
-      }
-    }, 0);
-  } catch (error) {
-    console.error(error);
-
-    try {
-      await interaction.editReply(`エラー: ${error.message}`);
-    } catch (replyError) {
-      console.error('Failed to edit reply:', replyError);
-    }
-  }
-
-  return;
-}
 
   if (interaction.commandName === 'continue') {
     const prompt = interaction.options.getString('prompt', true);
