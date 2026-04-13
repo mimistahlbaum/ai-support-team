@@ -100,6 +100,8 @@ const JSON_MODEL = 'llama-3.1-8b-instant';
 
 const MIGRATION_FALLBACK_TASK_MEMORY_FILE = path.join(process.cwd(), 'task_memory.json');
 const MIGRATION_FALLBACK_PROFILE_FILE = path.join(process.cwd(), 'user_profile.json');
+const MANUAL_BACKUP_TASK_MEMORY_FILE = path.join(process.cwd(), 'task_memory.backup.json');
+const MANUAL_BACKUP_PROFILE_FILE = path.join(process.cwd(), 'user_profile.backup.json');
 
 const REQUEST_TIMEOUT_MS = 12000;
 const SEND_TIMEOUT_MS = 8000;
@@ -344,7 +346,7 @@ async function flushTaskMemory({ local = false, supabase: remote = true } = {}) 
   try {
     if (local) {
       fs.writeFileSync(
-        MIGRATION_FALLBACK_TASK_MEMORY_FILE,
+        MANUAL_BACKUP_TASK_MEMORY_FILE,
         JSON.stringify(serializeTaskMemory(), null, 2),
         'utf8'
       );
