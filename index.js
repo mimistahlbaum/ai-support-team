@@ -1474,7 +1474,10 @@ if (interaction.commandName === 'starttask') {
   const title = interaction.options.getString('title', true);
   const prompt = interaction.options.getString('prompt', true);
 
-  await interaction.deferReply({ flags: 64 });
+  await interaction.reply({
+  content: '依頼を受け取りました。専用チャンネルを作成します。',
+  flags: 64,
+});
 
   try {
     const guild = interaction.guild;
