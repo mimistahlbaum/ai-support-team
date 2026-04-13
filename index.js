@@ -863,7 +863,7 @@ ${historyContext}
     return response.choices?.[0]?.message?.content || '(no response)';
   } catch (error) {
     if (isModelLimitError(error)) {
-      return await askOpenRouter(coordinatorSystem, userPrompt);
+      return await askGroq(coordinatorSystem, userPrompt);
     }
     return `Coordinator error: ${error.message}`;
   }
@@ -951,7 +951,7 @@ ${mode}
       return response.text || '(no response)';
     } catch (error) {
       if (isModelLimitError(error)) {
-        return await askOpenRouter(sparkSystem, userPrompt);
+        return await askGroq(sparkSystem, userPrompt);
       }
       return `Spark error: ${error.message}`;
     }
@@ -999,7 +999,7 @@ ${mode}
       return response.choices?.[0]?.message?.content || '(no response)';
     } catch (error) {
       if (isModelLimitError(error)) {
-        return await askOpenRouter(forgeSystem, userPrompt);
+        return await askGroq(forgeSystem, userPrompt);
       }
       return `Forge error: ${error.message}`;
     }
@@ -1041,7 +1041,7 @@ ${mode}
       return response.text || '(no response)';
     } catch (error) {
       if (isModelLimitError(error)) {
-        return await askOpenRouter(mirrorSystem, userPrompt);
+        return await askGroq(mirrorSystem, userPrompt);
       }
       return `Mirror error: ${error.message}`;
     }
