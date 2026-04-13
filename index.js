@@ -1503,7 +1503,7 @@ if (interaction.commandName === 'starttask') {
 
     await interaction.editReply(`専用チャンネルを作成しました: ${channel}`);
 
-    const startText = `新しいタスクを開始します。
+    const startText = `新しいタスクを開始します。`;
 Type: ${taskType}
 Title: ${title}
 
@@ -1562,7 +1562,7 @@ Title: ${title}
 
     await interaction.editReply(`専用チャンネルを作成しました: ${channel}`);
 
-    const startText = `新しいタスクを開始します。
+    const startText = `新しいタスクを開始します。`;
 Type: ${taskType}
 Title: ${title}
 
