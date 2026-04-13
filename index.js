@@ -419,7 +419,7 @@ function appendHistory(channelId, role, mode, content) {
     task.history = task.history.slice(-120);
   }
 
-  saveTaskMemory();
+  void saveTaskMemory();
 }
 
 function buildHistoryContext(channelId, maxItems = 14) {
@@ -1347,7 +1347,7 @@ async function autoCreateTaskFromMessage(message) {
 
   const task = ensureTask(channel.id, taskType, title, prompt);
   task.channelId = channel.id;
-  saveTaskMemory();
+  void saveTaskMemory();
 
   appendHistory(
     channel.id,
@@ -1474,7 +1474,7 @@ if (interaction.commandName === 'starttask') {
   const title = interaction.options.getString('title', true);
   const prompt = interaction.options.getString('prompt', true);
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: 64 });
 
   try {
     const guild = interaction.guild;
@@ -1492,7 +1492,7 @@ if (interaction.commandName === 'starttask') {
 
     const task = ensureTask(channel.id, taskType, title, prompt);
     task.channelId = channel.id;
-    saveTaskMemory();
+    await saveTaskMemory();
 
     appendHistory(
       channel.id,
@@ -1503,41 +1503,35 @@ if (interaction.commandName === 'starttask') {
 
     await interaction.editReply(`専用チャンネルを作成しました: ${channel}`);
 
-const startText = `新しいタスクを開始します。
+    const startText = `新しいタスクを開始します。
 
 Type: ${taskType}
 Title: ${title}
 
 ここからチームが自律的に会議して、必要なら実行まで進めます。`;
 
-    setTimeout(async () => {
+    queueMicrotask(async () => {
       try {
-        await sendAsBot(coordinator, channel.id, startText, 'Coordinator');
+        await channel.send(startText);
         appendHistory(channel.id, 'Coordinator', 'control', startText);
-
         await runDynamicMeeting(channel, prompt, 'start');
       } catch (error) {
-        console.error(error);
+        console.error('starttask background error:', error);
 
         try {
-          await sendAsBot(
-            coordinator,
-            channel.id,
-            `処理中にエラーが発生しました: ${error.message}`,
-            'Coordinator'
-          );
+          await channel.send(`処理中にエラーが発生しました: ${error.message}`);
         } catch (innerError) {
-          console.error('Failed to send error message to task channel:', innerError);
+          console.error('failed to send task-channel error:', innerError);
         }
       }
-    }, 0);
+    });
   } catch (error) {
-    console.error(error);
+    console.error('starttask error:', error);
 
     try {
       await interaction.editReply(`エラー: ${error.message}`);
     } catch (replyError) {
-      console.error('Failed to edit reply:', replyError);
+      console.error('failed to edit starttask reply:', replyError);
     }
   }
 
