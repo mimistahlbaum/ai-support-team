@@ -1,6 +1,4 @@
-import 'dotenv/config';
 import fs from 'fs';
-import path from 'path';
 import http from 'http';
 import {
   Client,
@@ -9,72 +7,45 @@ import {
   Routes,
   SlashCommandBuilder,
   ChannelType,
-  PermissionFlagsBits,
 } from 'discord.js';
-import OpenAI from 'openai';
-import { createClient } from '@supabase/supabase-js';
-import { Client as NotionClient } from '@notionhq/client';
-
-// =========================================================
-// env / client init
-// =========================================================
-
-const {
+import {
   DISCORD_GUILD_ID,
-
   SCOUT_BOT_TOKEN,
   SCOUT_CLIENT_ID,
-
   SPARK_BOT_TOKEN,
   SPARK_CLIENT_ID,
-
   FORGE_BOT_TOKEN,
   FORGE_CLIENT_ID,
-
   MIRROR_BOT_TOKEN,
   MIRROR_CLIENT_ID,
-
   COORDINATOR_BOT_TOKEN,
   COORDINATOR_CLIENT_ID,
-
-  GROQ_API_KEY,
-  TAVILY_API_KEY,
-  NOTION_KEY,
-
-  SUPABASE_URL,
-  SUPABASE_ANON_KEY,
-  TASK_ADMIN_ROLE_ID,
-} = process.env;
-
-if (
-  !DISCORD_GUILD_ID ||
-  !SCOUT_BOT_TOKEN ||
-  !SCOUT_CLIENT_ID ||
-  !SPARK_BOT_TOKEN ||
-  !SPARK_CLIENT_ID ||
-  !FORGE_BOT_TOKEN ||
-  !FORGE_CLIENT_ID ||
-  !MIRROR_BOT_TOKEN ||
-  !MIRROR_CLIENT_ID ||
-  !COORDINATOR_BOT_TOKEN ||
-  !COORDINATOR_CLIENT_ID ||
-  !GROQ_API_KEY ||
-  !TAVILY_API_KEY ||
-  !NOTION_KEY ||
-  !SUPABASE_URL ||
-  !SUPABASE_ANON_KEY
-) {
-  console.error('Missing required env vars.');
-  process.exit(1);
-}
-
-const groq = new OpenAI({
-  apiKey: GROQ_API_KEY,
-  baseURL: 'https://api.groq.com/openai/v1',
-});
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-const notion = new NotionClient({ auth: NOTION_KEY });
+} from './src/app/env.js';
+import {
+  PORT,
+  MAX_DYNAMIC_TURNS,
+  TEXT_MODEL,
+  REQUEST_TIMEOUT_MS,
+  API_RETRIES,
+  SAVE_DEBOUNCE_SUPABASE_MS,
+  MIGRATION_FALLBACK_TASK_MEMORY_FILE,
+  MIGRATION_FALLBACK_PROFILE_FILE,
+  MANUAL_BACKUP_TASK_MEMORY_FILE,
+  MANUAL_BACKUP_PROFILE_FILE,
+} from './src/app/constants.js';
+import { nowIso } from './src/utils/time.js';
+import { clip } from './src/utils/text.js';
+import { formatError } from './src/utils/errors.js';
+import { withTimeout } from './src/utils/timeout.js';
+import { retryAsync } from './src/utils/retry.js';
+import { makeRunId } from './src/utils/ids.js';
+import { sendAsBot, safeCoordinatorStop } from './src/discord/send-message.js';
+import { createTaskChannel } from './src/discord/channel-factory.js';
+import { askGroq } from './src/services/llm/ask-groq.js';
+import { safeJsonFromGroq } from './src/services/llm/safe-json.js';
+import { notionSearch, formatNotionSearchResults } from './src/services/search/notion-search.js';
+import { searchTavily } from './src/services/search/tavily-search.js';
+import { supabase } from './src/services/storage/supabase-client.js';
 
 const scout = new Client({ intents: [GatewayIntentBits.Guilds] });
 const spark = new Client({ intents: [GatewayIntentBits.Guilds] });
@@ -87,27 +58,6 @@ const coordinator = new Client({
     GatewayIntentBits.MessageContent,
   ],
 });
-
-// =========================================================
-// constants
-// =========================================================
-
-const PORT = process.env.PORT || 10000;
-const DISCORD_SAFE_LIMIT = 1800;
-const MAX_DYNAMIC_TURNS = 6;
-const TEXT_MODEL = 'llama-3.1-8b-instant';
-const JSON_MODEL = 'llama-3.1-8b-instant';
-
-const MIGRATION_FALLBACK_TASK_MEMORY_FILE = path.join(process.cwd(), 'task_memory.json');
-const MIGRATION_FALLBACK_PROFILE_FILE = path.join(process.cwd(), 'user_profile.json');
-const MANUAL_BACKUP_TASK_MEMORY_FILE = path.join(process.cwd(), 'task_memory.backup.json');
-const MANUAL_BACKUP_PROFILE_FILE = path.join(process.cwd(), 'user_profile.backup.json');
-
-const REQUEST_TIMEOUT_MS = 12000;
-const SEND_TIMEOUT_MS = 8000;
-const API_RETRIES = 2;
-const SEND_RETRIES = 2;
-const SAVE_DEBOUNCE_SUPABASE_MS = 5000;
 
 // =========================================================
 // runtime storage
@@ -127,64 +77,6 @@ let isShuttingDown = false;
 // =========================================================
 // utils
 // =========================================================
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function clip(text, max = 500) {
-  if (!text) return '';
-  return text.length > max ? `${text.slice(0, max)} ...` : text;
-}
-
-function formatError(error) {
-  return error?.stack || error?.message || String(error);
-}
-
-function splitLongText(text, maxLength = DISCORD_SAFE_LIMIT) {
-  if (!text) return ['(no response)'];
-  if (text.length <= maxLength) return [text];
-
-  const chunks = [];
-  let remaining = text;
-
-  while (remaining.length > maxLength) {
-    let splitAt = remaining.lastIndexOf('\n\n', maxLength);
-    if (splitAt < 500) splitAt = remaining.lastIndexOf('\n', maxLength);
-    if (splitAt < 300) splitAt = remaining.lastIndexOf(' ', maxLength);
-    if (splitAt < 100) splitAt = maxLength;
-
-    chunks.push(remaining.slice(0, splitAt).trim());
-    remaining = remaining.slice(splitAt).trim();
-  }
-
-  if (remaining.length > 0) chunks.push(remaining);
-  return chunks;
-}
-
-function safeChannelName(title) {
-  const base = String(title || '')
-    .normalize('NFKC')
-    .trim()
-    .toLowerCase();
-
-  const cleaned = base
-    .replace(/[\s_]+/g, '-')
-    .replace(/[^\p{L}\p{N}-]+/gu, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 80);
-
-  const isUsable = cleaned && /[\p{L}\p{N}]/u.test(cleaned);
-  if (isUsable) return `task-${cleaned}`.slice(0, 95);
-
-  const ts = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  return `task-${ts}`;
-}
 
 function isLikelyTrivialMessage(content) {
   const text = String(content || '').trim();
@@ -226,46 +118,6 @@ function isProviderFailureText(text) {
     msg.includes('model temporarily unavailable') ||
     msg.includes('provider unavailable')
   );
-}
-
-function withTimeout(promiseFactory, ms, label) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`${label} timeout after ${ms}ms`));
-    }, ms);
-
-    Promise.resolve()
-      .then(() => promiseFactory())
-      .then(result => {
-        clearTimeout(timer);
-        resolve(result);
-      })
-      .catch(error => {
-        clearTimeout(timer);
-        reject(error);
-      });
-  });
-}
-
-async function retryAsync(fn, { retries = 2, delayMs = 500, label = 'operation' } = {}) {
-  let lastError;
-
-  for (let attempt = 1; attempt <= retries + 1; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error;
-      if (attempt > retries) break;
-      console.warn(`${label} attempt ${attempt} failed: ${error.message}`);
-      await sleep(delayMs * attempt);
-    }
-  }
-
-  throw new Error(`${label} failed after retries: ${lastError?.message || 'unknown'}`);
-}
-
-function makeRunId(channelId) {
-  return `${channelId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function touchTask(task, updates = {}) {
@@ -744,137 +596,6 @@ ${buildUserProfileContext()}
   };
 }
 
-// =========================================================
-// llm / external calls
-// =========================================================
-
-async function askGroq(systemPrompt, userPrompt, options = {}) {
-  const { model = TEXT_MODEL, temperature = 0.6, max_tokens = 900 } = options;
-
-  try {
-    const response = await retryAsync(
-      () => withTimeout(
-        () => groq.chat.completions.create({
-          model,
-          temperature,
-          max_tokens,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-        }),
-        REQUEST_TIMEOUT_MS,
-        'groq completion'
-      ),
-      { retries: API_RETRIES, label: 'askGroq' }
-    );
-
-    return response.choices?.[0]?.message?.content || '(no response)';
-  } catch (error) {
-    console.error('askGroq error:', error?.message || error);
-    return `Groq error: ${error?.message || 'unknown error'}`;
-  }
-}
-
-async function safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject) {
-  try {
-    const response = await retryAsync(
-      () => withTimeout(
-        () => groq.chat.completions.create({
-          model: JSON_MODEL,
-          temperature: 0.2,
-          max_tokens: 500,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-        }),
-        REQUEST_TIMEOUT_MS,
-        'groq json completion'
-      ),
-      { retries: API_RETRIES, label: 'safeJsonFromGroq' }
-    );
-
-    const raw = response.choices?.[0]?.message?.content || '{}';
-    const match = raw.match(/\{[\s\S]*\}/);
-    return JSON.parse(match ? match[0] : '{}');
-  } catch (error) {
-    console.error('safeJsonFromGroq error:', error?.message || error);
-    return fallbackObject;
-  }
-}
-
-async function notionSearch(query) {
-  try {
-    const response = await retryAsync(
-      () => withTimeout(
-        () => notion.search({ query, page_size: 10 }),
-        REQUEST_TIMEOUT_MS,
-        'notion search'
-      ),
-      { retries: API_RETRIES, label: 'notion search' }
-    );
-    return response.results || [];
-  } catch (error) {
-    console.error('Notion search failed:', error.message);
-    return [];
-  }
-}
-
-function formatNotionSearchResults(results) {
-  if (!results.length) return 'No Notion results found.';
-  return results
-    .map((item, index) => {
-      const title =
-        item.object === 'page'
-          ? item.properties?.title?.title?.[0]?.plain_text || item.properties?.Name?.title?.[0]?.plain_text || item.url || 'Untitled page'
-          : item.url || 'Untitled';
-
-      return `${index + 1}. ${title}\n${item.url || ''}`;
-    })
-    .join('\n\n');
-}
-
-async function searchTavily(query) {
-  try {
-    const res = await retryAsync(
-      () => withTimeout(
-        () => fetch('https://api.tavily.com/search', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${TAVILY_API_KEY}`,
-          },
-          body: JSON.stringify({
-            query,
-            topic: 'general',
-            search_depth: 'advanced',
-            max_results: 5,
-            include_answer: true,
-          }),
-        }),
-        REQUEST_TIMEOUT_MS,
-        'tavily search'
-      ),
-      { retries: API_RETRIES, label: 'tavily search' }
-    );
-
-    if (!res.ok) return `Scout error: ${res.status} ${await res.text()}`;
-
-    const data = await res.json();
-    const answer = data.answer ? `Summary:\n${data.answer}\n\n` : '';
-    const results = Array.isArray(data.results) ? data.results : [];
-
-    if (!results.length) return `${answer}No useful results found.`;
-
-    return answer + results
-      .map((r, i) => `${i + 1}. ${r.title || 'Untitled'}\n${r.url || ''}\n${clip(r.content || '', 300)}`)
-      .join('\n\n');
-  } catch (error) {
-    return `Scout error: ${error.message}`;
-  }
-}
-
 async function updateHistorySummary(channelId) {
   const task = taskMemory.get(channelId);
   if (!task) return;
@@ -1103,41 +824,6 @@ function roleClient(role) {
 }
 
 // =========================================================
-// discord send helpers
-// =========================================================
-
-async function getChannel(botClient, channelId) {
-  let channel = botClient.channels.cache.get(channelId);
-  if (!channel) channel = await botClient.channels.fetch(channelId);
-  if (!channel) throw new Error(`Channel not found: ${channelId}`);
-  return channel;
-}
-
-async function sendAsBot(botClient, channelId, text, label = '') {
-  const channel = await retryAsync(
-    () => withTimeout(() => getChannel(botClient, channelId), SEND_TIMEOUT_MS, 'fetch discord channel'),
-    { retries: SEND_RETRIES, label: 'resolve discord channel' }
-  );
-
-  const chunks = splitLongText(text);
-  for (let i = 0; i < chunks.length; i++) {
-    const prefix = i === 0 || !label ? '' : `[${label} cont. ${i + 1}]\n`;
-    await retryAsync(
-      () => withTimeout(() => channel.send(prefix + chunks[i]), SEND_TIMEOUT_MS, 'discord send'),
-      { retries: SEND_RETRIES, label: 'discord send' }
-    );
-  }
-}
-
-async function safeCoordinatorStop(channelId, text) {
-  try {
-    await sendAsBot(coordinator, channelId, text, 'Coordinator');
-  } catch (error) {
-    console.error('Failed to send stop message:', error.message || error);
-  }
-}
-
-// =========================================================
 // meeting orchestration
 // =========================================================
 
@@ -1145,7 +831,7 @@ async function executeMeetingRun(channel, latestUserPrompt, invocationMode) {
   const task = getTask(channel.id);
 
   if (!task) {
-    await safeCoordinatorStop(channel.id, 'このチャンネルにタスク情報がありません。新しく /starttask してください。');
+    await safeCoordinatorStop(coordinator, channel.id, 'このチャンネルにタスク情報がありません。新しく /starttask してください。');
     return;
   }
 
@@ -1217,7 +903,7 @@ async function executeMeetingRun(channel, latestUserPrompt, invocationMode) {
       if (isProviderFailureText(output)) {
         touchTask(task, { status: 'error', activeSpeaker: 'none' });
         const stopText = '外部APIの失敗が続いたため安全停止します。しばらく待ってから /continue または /resume を使ってください。';
-        await safeCoordinatorStop(channel.id, stopText);
+        await safeCoordinatorStop(coordinator, channel.id, stopText);
         appendHistory(channel.id, 'Coordinator', 'control', stopText);
         scheduleTaskMemorySave({ immediate: true });
         return;
@@ -1230,13 +916,13 @@ async function executeMeetingRun(channel, latestUserPrompt, invocationMode) {
 
     touchTask(task, { status: 'waiting', activeSpeaker: 'none' });
     const stopText = '安全上限に達したため、ここで会議を停止します。必要なら /continue または /resume で再開してください。';
-    await safeCoordinatorStop(channel.id, stopText);
+    await safeCoordinatorStop(coordinator, channel.id, stopText);
     appendHistory(channel.id, 'Coordinator', 'control', stopText);
     scheduleTaskMemorySave({ immediate: true });
   } catch (error) {
     console.error('executeMeetingRun failed:', error.message || error);
     touchTask(task, { status: 'error', activeSpeaker: 'none' });
-    await safeCoordinatorStop(channel.id, `実行中にエラーが発生したため停止しました: ${error.message}`);
+    await safeCoordinatorStop(coordinator, channel.id, `実行中にエラーが発生したため停止しました: ${error.message}`);
     appendHistory(channel.id, 'Coordinator', 'control', `Run error: ${error.message}`);
     scheduleTaskMemorySave({ immediate: true });
   }
@@ -1245,7 +931,7 @@ async function executeMeetingRun(channel, latestUserPrompt, invocationMode) {
 async function runResume(channel) {
   const task = getTask(channel.id);
   if (!task) {
-    await safeCoordinatorStop(channel.id, 'このチャンネルの保存済みタスクが見つかりません。');
+    await safeCoordinatorStop(coordinator, channel.id, 'このチャンネルの保存済みタスクが見つかりません。');
     return;
   }
 
@@ -1259,66 +945,6 @@ async function runResume(channel) {
   const resumePrompt = `保存済みメモリを踏まえて、このタスクを再開してください。\n\n元の依頼:\n${task.prompt}\n\n現在の要約:\n${task.summary || 'なし'}\n\nopenQuestions:\n${(task.openQuestions || []).join('\n') || 'なし'}\n\nnextActions:\n${(task.nextActions || []).join('\n') || 'なし'}\n\n必要なら修正、補強、続行を行ってください。`;
 
   await enqueueMeetingRun(channel, resumePrompt, 'resume');
-}
-
-// =========================================================
-// channel create helper
-// =========================================================
-
-function buildTaskChannelOverwrites(guild, creatorId) {
-  const overwrites = [
-    {
-      id: guild.roles.everyone.id,
-      deny: [PermissionFlagsBits.ViewChannel],
-    },
-    {
-      id: creatorId,
-      allow: [
-        PermissionFlagsBits.ViewChannel,
-        PermissionFlagsBits.SendMessages,
-        PermissionFlagsBits.ReadMessageHistory,
-      ],
-    },
-    {
-      id: SCOUT_CLIENT_ID,
-      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-    },
-    {
-      id: SPARK_CLIENT_ID,
-      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-    },
-    {
-      id: FORGE_CLIENT_ID,
-      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-    },
-    {
-      id: MIRROR_CLIENT_ID,
-      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-    },
-    {
-      id: COORDINATOR_CLIENT_ID,
-      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-    },
-  ];
-
-  if (TASK_ADMIN_ROLE_ID) {
-    overwrites.push({
-      id: TASK_ADMIN_ROLE_ID,
-      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-    });
-  }
-
-  return overwrites;
-}
-
-async function createTaskChannel(guild, creatorId, title, taskType, reason) {
-  return guild.channels.create({
-    name: safeChannelName(title),
-    type: ChannelType.GuildText,
-    topic: `Task channel for ${taskType} | title: ${clip(title, 120)}`,
-    reason,
-    permissionOverwrites: buildTaskChannelOverwrites(guild, creatorId),
-  });
 }
 
 async function autoCreateTaskFromMessage(message) {
