@@ -1542,7 +1542,6 @@ Title: ${title}
 
   return;
 }
-
     const channel = await guild.channels.create({
       name: safeChannelName(title),
       type: ChannelType.GuildText,
