@@ -9,10 +9,15 @@ import {
   Routes,
   SlashCommandBuilder,
   ChannelType,
+  PermissionFlagsBits,
 } from 'discord.js';
 import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
 import { Client as NotionClient } from '@notionhq/client';
+
+// =========================================================
+// env / client init
+// =========================================================
 
 const {
   DISCORD_GUILD_ID,
@@ -38,30 +43,24 @@ const {
 
   SUPABASE_URL,
   SUPABASE_ANON_KEY,
+  TASK_ADMIN_ROLE_ID,
 } = process.env;
 
 if (
   !DISCORD_GUILD_ID ||
-
   !SCOUT_BOT_TOKEN ||
   !SCOUT_CLIENT_ID ||
-
   !SPARK_BOT_TOKEN ||
   !SPARK_CLIENT_ID ||
-
   !FORGE_BOT_TOKEN ||
   !FORGE_CLIENT_ID ||
-
   !MIRROR_BOT_TOKEN ||
   !MIRROR_CLIENT_ID ||
-
   !COORDINATOR_BOT_TOKEN ||
   !COORDINATOR_CLIENT_ID ||
-
   !GROQ_API_KEY ||
   !TAVILY_API_KEY ||
   !NOTION_KEY ||
-
   !SUPABASE_URL ||
   !SUPABASE_ANON_KEY
 ) {
@@ -75,38 +74,12 @@ const groq = new OpenAI({
 });
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const notion = new NotionClient({ auth: NOTION_KEY });
 
-const notion = new NotionClient({
-  auth: NOTION_KEY,
-});
-
-const PORT = process.env.PORT || 10000;
-
-const healthServer = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('ok');
-});
-
-healthServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`Health server listening on ${PORT}`);
-});
-
-const scout = new Client({
-  intents: [GatewayIntentBits.Guilds],
-});
-
-const spark = new Client({
-  intents: [GatewayIntentBits.Guilds],
-});
-
-const forge = new Client({
-  intents: [GatewayIntentBits.Guilds],
-});
-
-const mirror = new Client({
-  intents: [GatewayIntentBits.Guilds],
-});
-
+const scout = new Client({ intents: [GatewayIntentBits.Guilds] });
+const spark = new Client({ intents: [GatewayIntentBits.Guilds] });
+const forge = new Client({ intents: [GatewayIntentBits.Guilds] });
+const mirror = new Client({ intents: [GatewayIntentBits.Guilds] });
 const coordinator = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -115,140 +88,57 @@ const coordinator = new Client({
   ],
 });
 
+// =========================================================
+// constants
+// =========================================================
+
+const PORT = process.env.PORT || 10000;
 const DISCORD_SAFE_LIMIT = 1800;
 const MAX_DYNAMIC_TURNS = 6;
+const TEXT_MODEL = 'llama-3.1-8b-instant';
+const JSON_MODEL = 'llama-3.1-8b-instant';
+
 const MEMORY_FILE = path.join(process.cwd(), 'task_memory.json');
 const PROFILE_FILE = path.join(process.cwd(), 'user_profile.json');
 
-const TEXT_MODEL = 'llama-3.1-8b-instant';
-const JSON_MODEL = 'llama-3.1-8b-instant';
+const REQUEST_TIMEOUT_MS = 12000;
+const SEND_TIMEOUT_MS = 8000;
+const API_RETRIES = 2;
+const SEND_RETRIES = 2;
+const SAVE_DEBOUNCE_LOCAL_MS = 1500;
+const SAVE_DEBOUNCE_SUPABASE_MS = 5000;
+
+// =========================================================
+// runtime storage
+// =========================================================
 
 let userProfile = {};
 const taskMemory = new Map();
 
-async function saveTaskMemory() {
-  try {
-    const data = Object.fromEntries(taskMemory);
+const saveState = {
+  localTimer: null,
+  supabaseTimer: null,
+  pendingLocal: false,
+  pendingSupabase: false,
+};
 
-    fs.writeFileSync(MEMORY_FILE, JSON.stringify(data, null, 2), 'utf8');
+const channelRunState = new Map();
 
-    const { error } = await supabase
-      .from('bot_storage')
-      .upsert({
-        key: 'task_memory',
-        value: data,
-        updated_at: new Date().toISOString(),
-      });
+// =========================================================
+// utils
+// =========================================================
 
-    if (error) {
-      console.error('Failed to save task memory to Supabase:', error.message);
-    }
-  } catch (error) {
-    console.error('Failed to save task memory:', error);
-  }
+function nowIso() {
+  return new Date().toISOString();
 }
 
-async function loadTaskMemory() {
-  try {
-    const { data, error } = await supabase
-      .from('bot_storage')
-      .select('value')
-      .eq('key', 'task_memory')
-      .maybeSingle();
-
-    if (!error && data?.value) {
-      taskMemory.clear();
-
-      for (const [key, value] of Object.entries(data.value)) {
-        taskMemory.set(key, value);
-      }
-
-      console.log(`Loaded ${taskMemory.size} task memories from Supabase.`);
-      return;
-    }
-
-    if (!fs.existsSync(MEMORY_FILE)) return;
-
-    const raw = fs.readFileSync(MEMORY_FILE, 'utf8');
-    if (!raw.trim()) return;
-
-    const parsed = JSON.parse(raw);
-    taskMemory.clear();
-
-    for (const [key, value] of Object.entries(parsed)) {
-      taskMemory.set(key, value);
-    }
-
-    console.log(`Loaded ${taskMemory.size} task memories locally.`);
-  } catch (error) {
-    console.error('Failed to load task memory:', error);
-  }
-}
-
-async function loadUserProfile() {
-  try {
-    const { data, error } = await supabase
-      .from('bot_storage')
-      .select('value')
-      .eq('key', 'user_profile')
-      .maybeSingle();
-
-    if (!error && data?.value) {
-      userProfile = data.value;
-      console.log('Loaded user profile from Supabase.');
-      return;
-    }
-
-    if (!fs.existsSync(PROFILE_FILE)) {
-      userProfile = {};
-      return;
-    }
-
-    const raw = fs.readFileSync(PROFILE_FILE, 'utf8');
-    if (!raw.trim()) {
-      userProfile = {};
-      return;
-    }
-
-    userProfile = JSON.parse(raw);
-    console.log('Loaded user profile locally.');
-  } catch (error) {
-    console.error('Failed to load user profile:', error);
-    userProfile = {};
-  }
-}
-
-async function saveUserProfile() {
-  try {
-    fs.writeFileSync(PROFILE_FILE, JSON.stringify(userProfile, null, 2), 'utf8');
-
-    const { error } = await supabase
-      .from('bot_storage')
-      .upsert({
-        key: 'user_profile',
-        value: userProfile,
-        updated_at: new Date().toISOString(),
-      });
-
-    if (error) {
-      console.error('Failed to save user profile to Supabase:', error.message);
-    }
-  } catch (error) {
-    console.error('Failed to save user profile:', error);
-  }
-}
-
-function safeChannelName(title) {
-  return `task-${title}`
-    .toLowerCase()
-    .replace(/[^a-z0-9\-]/g, '-')
-    .replace(/-+/g, '-')
-    .slice(0, 90);
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function clip(text, max = 500) {
   if (!text) return '';
-  return text.length > max ? text.slice(0, max) + ' ...' : text;
+  return text.length > max ? `${text.slice(0, max)} ...` : text;
 }
 
 function splitLongText(text, maxLength = DISCORD_SAFE_LIMIT) {
@@ -268,55 +158,342 @@ function splitLongText(text, maxLength = DISCORD_SAFE_LIMIT) {
     remaining = remaining.slice(splitAt).trim();
   }
 
-  if (remaining.length > 0) {
-    chunks.push(remaining);
-  }
-
+  if (remaining.length > 0) chunks.push(remaining);
   return chunks;
 }
 
-async function getChannel(botClient, channelId) {
-  let channel = botClient.channels.cache.get(channelId);
-  if (!channel) {
-    channel = await botClient.channels.fetch(channelId);
-  }
-  if (!channel) {
-    throw new Error(`Channel not found: ${channelId}`);
-  }
-  return channel;
+function safeChannelName(title) {
+  const base = String(title || '')
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase();
+
+  const cleaned = base
+    .replace(/[\s_]+/g, '-')
+    .replace(/[^\p{L}\p{N}-]+/gu, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80);
+
+  const isUsable = cleaned && /[\p{L}\p{N}]/u.test(cleaned);
+  if (isUsable) return `task-${cleaned}`.slice(0, 95);
+
+  const ts = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  return `task-${ts}`;
 }
 
-async function sendAsBot(botClient, channelId, text, label = '') {
-  const channel = await getChannel(botClient, channelId);
-  const chunks = splitLongText(text);
+function isLikelyTrivialMessage(content) {
+  const text = String(content || '').trim();
+  if (!text) return true;
+  if (text.length <= 2) return true;
 
-  for (let i = 0; i < chunks.length; i++) {
-    const prefix =
-      i === 0 || !label
-        ? ''
-        : `[${label} cont. ${i + 1}]\n`;
+  const lower = text.toLowerCase();
+  const trivial = new Set([
+    'ok',
+    'okay',
+    'thanks',
+    'thank you',
+    'thx',
+    '了解',
+    'ありがとう',
+    'いいね',
+    'yes',
+    'no',
+    'k',
+  ]);
+  if (trivial.has(lower)) return true;
 
-    await channel.send(prefix + chunks[i]);
+  const emojiOnly = /^[\p{Emoji}\p{Extended_Pictographic}\s]+$/u.test(text);
+  if (emojiOnly) return true;
+
+  const urlOnly = /^(https?:\/\/\S+\s*)+$/i.test(text);
+  if (urlOnly) return true;
+
+  if (/^(lol|lmao|w+|草)+$/i.test(lower)) return true;
+  return false;
+}
+
+function isProviderFailureText(text) {
+  const msg = String(text || '').toLowerCase();
+  return (
+    msg.includes('groq error:') ||
+    msg.includes('scout error:') ||
+    msg.includes('notion error:') ||
+    msg.includes('model temporarily unavailable') ||
+    msg.includes('provider unavailable')
+  );
+}
+
+function withTimeout(promiseFactory, ms, label) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timeout after ${ms}ms`));
+    }, ms);
+
+    Promise.resolve()
+      .then(() => promiseFactory())
+      .then(result => {
+        clearTimeout(timer);
+        resolve(result);
+      })
+      .catch(error => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
+async function retryAsync(fn, { retries = 2, delayMs = 500, label = 'operation' } = {}) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt > retries) break;
+      console.warn(`${label} attempt ${attempt} failed: ${error.message}`);
+      await sleep(delayMs * attempt);
+    }
+  }
+
+  throw new Error(`${label} failed after retries: ${lastError?.message || 'unknown'}`);
+}
+
+function makeRunId(channelId) {
+  return `${channelId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function touchTask(task, updates = {}) {
+  const canonical =
+    typeof task === 'string'
+      ? taskMemory.get(task)
+      : taskMemory.get(task?.channelId) || task;
+
+  if (!canonical) return;
+
+  Object.assign(canonical, updates);
+  canonical.lastUpdatedAt = nowIso();
+  scheduleTaskMemorySave();
+}
+
+function normalizeTask(task, fallback = {}) {
+  const base = {
+    taskType: 'general',
+    title: '',
+    originalTitle: '',
+    prompt: '',
+    scoutEvidence: '',
+    summary: '',
+    historySummary: '',
+    lastExecution: '',
+    cycleCount: 0,
+    channelId: '',
+    history: [],
+    status: 'idle',
+    activeSpeaker: 'none',
+    runId: '',
+    lastUpdatedAt: nowIso(),
+    openQuestions: [],
+    nextActions: [],
+    decisionLog: [],
+    ...fallback,
+    ...task,
+  };
+
+  base.history = Array.isArray(base.history) ? base.history : [];
+  base.openQuestions = Array.isArray(base.openQuestions) ? base.openQuestions : [];
+  base.nextActions = Array.isArray(base.nextActions) ? base.nextActions : [];
+  base.decisionLog = Array.isArray(base.decisionLog) ? base.decisionLog : [];
+
+  return base;
+}
+
+function upsertNormalizedTask(channelId, partialTask, fallback = {}) {
+  const normalized = normalizeTask(partialTask, fallback);
+  taskMemory.set(channelId, normalized);
+  return normalized;
+}
+
+// =========================================================
+// persistence
+// =========================================================
+
+function serializeTaskMemory() {
+  return Object.fromEntries(taskMemory);
+}
+
+function saveTaskMemoryLocalSync() {
+  const data = serializeTaskMemory();
+  fs.writeFileSync(MEMORY_FILE, JSON.stringify(data, null, 2), 'utf8');
+}
+
+async function saveTaskMemorySupabase() {
+  const data = serializeTaskMemory();
+  const { error } = await retryAsync(
+    () => withTimeout(
+      () => supabase.from('bot_storage').upsert({
+        key: 'task_memory',
+        value: data,
+        updated_at: nowIso(),
+      }),
+      REQUEST_TIMEOUT_MS,
+      'supabase upsert task_memory'
+    ),
+    { retries: API_RETRIES, label: 'save task memory to supabase' }
+  );
+
+  if (error) {
+    throw new Error(error.message || 'unknown supabase error');
   }
 }
+
+async function flushTaskMemory({ local = true, supabase: remote = true } = {}) {
+  try {
+    if (local) saveTaskMemoryLocalSync();
+    if (remote) await saveTaskMemorySupabase();
+  } catch (error) {
+    console.error('flushTaskMemory failed:', error.message || error);
+  }
+}
+
+function scheduleTaskMemorySave({ local = true, supabase: remote = true, immediate = false } = {}) {
+  if (immediate) {
+    if (saveState.localTimer) clearTimeout(saveState.localTimer);
+    if (saveState.supabaseTimer) clearTimeout(saveState.supabaseTimer);
+    saveState.localTimer = null;
+    saveState.supabaseTimer = null;
+    saveState.pendingLocal = false;
+    saveState.pendingSupabase = false;
+    void flushTaskMemory({ local, supabase: remote });
+    return;
+  }
+
+  if (local) {
+    saveState.pendingLocal = true;
+    if (saveState.localTimer) clearTimeout(saveState.localTimer);
+    saveState.localTimer = setTimeout(() => {
+      saveState.localTimer = null;
+      if (!saveState.pendingLocal) return;
+      saveState.pendingLocal = false;
+      try {
+        saveTaskMemoryLocalSync();
+      } catch (error) {
+        console.error('local task memory save failed:', error.message || error);
+      }
+    }, SAVE_DEBOUNCE_LOCAL_MS);
+  }
+
+  if (remote) {
+    saveState.pendingSupabase = true;
+    if (saveState.supabaseTimer) clearTimeout(saveState.supabaseTimer);
+    saveState.supabaseTimer = setTimeout(() => {
+      saveState.supabaseTimer = null;
+      if (!saveState.pendingSupabase) return;
+      saveState.pendingSupabase = false;
+      void saveTaskMemorySupabase().catch(error => {
+        console.error('supabase task memory save failed:', error.message || error);
+      });
+    }, SAVE_DEBOUNCE_SUPABASE_MS);
+  }
+}
+
+async function loadTaskMemory() {
+  try {
+    const { data, error } = await withTimeout(
+      () => supabase.from('bot_storage').select('value').eq('key', 'task_memory').maybeSingle(),
+      REQUEST_TIMEOUT_MS,
+      'supabase load task_memory'
+    );
+
+    if (!error && data?.value) {
+      taskMemory.clear();
+      for (const [key, value] of Object.entries(data.value)) {
+        taskMemory.set(key, normalizeTask(value));
+      }
+      console.log(`Loaded ${taskMemory.size} task memories from Supabase.`);
+      return;
+    }
+
+    if (!fs.existsSync(MEMORY_FILE)) return;
+    const raw = fs.readFileSync(MEMORY_FILE, 'utf8');
+    if (!raw.trim()) return;
+
+    const parsed = JSON.parse(raw);
+    taskMemory.clear();
+    for (const [key, value] of Object.entries(parsed)) {
+      taskMemory.set(key, normalizeTask(value));
+    }
+    console.log(`Loaded ${taskMemory.size} task memories locally.`);
+  } catch (error) {
+    console.error('Failed to load task memory:', error);
+  }
+}
+
+async function loadUserProfile() {
+  try {
+    const { data, error } = await withTimeout(
+      () => supabase.from('bot_storage').select('value').eq('key', 'user_profile').maybeSingle(),
+      REQUEST_TIMEOUT_MS,
+      'supabase load user_profile'
+    );
+
+    if (!error && data?.value) {
+      userProfile = data.value;
+      console.log('Loaded user profile from Supabase.');
+      return;
+    }
+
+    if (!fs.existsSync(PROFILE_FILE)) {
+      userProfile = {};
+      return;
+    }
+
+    const raw = fs.readFileSync(PROFILE_FILE, 'utf8');
+    userProfile = raw.trim() ? JSON.parse(raw) : {};
+    console.log('Loaded user profile locally.');
+  } catch (error) {
+    console.error('Failed to load user profile:', error);
+    userProfile = {};
+  }
+}
+
+async function saveUserProfile() {
+  try {
+    fs.writeFileSync(PROFILE_FILE, JSON.stringify(userProfile, null, 2), 'utf8');
+
+    const { error } = await withTimeout(
+      () => supabase.from('bot_storage').upsert({ key: 'user_profile', value: userProfile, updated_at: nowIso() }),
+      REQUEST_TIMEOUT_MS,
+      'save user profile'
+    );
+
+    if (error) {
+      console.error('Failed to save user profile to Supabase:', error.message);
+    }
+  } catch (error) {
+    console.error('Failed to save user profile:', error);
+  }
+}
+
+// =========================================================
+// task state / run queue
+// =========================================================
 
 function ensureTask(channelId, taskType, title, prompt) {
-  if (!taskMemory.has(channelId)) {
-    taskMemory.set(channelId, {
-      taskType,
-      title,
-      prompt,
-      scoutEvidence: '',
-      summary: '',
-      historySummary: '',
-      lastExecution: '',
-      cycleCount: 0,
-      channelId,
-      history: [],
-    });
-    void saveTaskMemory();
-  }
-  return taskMemory.get(channelId);
+  const existing = taskMemory.get(channelId);
+  if (existing) return existing;
+
+  const task = upsertNormalizedTask(channelId, {
+    taskType,
+    title,
+    originalTitle: title,
+    prompt,
+    channelId,
+    status: 'idle',
+  });
+  scheduleTaskMemorySave();
+  return task;
 }
 
 function getTask(channelId) {
@@ -327,23 +504,87 @@ function appendHistory(channelId, role, mode, content) {
   const task = taskMemory.get(channelId);
   if (!task) return;
 
-  if (!Array.isArray(task.history)) {
-    task.history = [];
-  }
+  task.history.push({ role, mode, content, timestamp: nowIso() });
+  if (task.history.length > 120) task.history = task.history.slice(-120);
 
-  task.history.push({
-    role,
-    mode,
-    content,
-    timestamp: new Date().toISOString(),
-  });
-
-  if (task.history.length > 120) {
-    task.history = task.history.slice(-120);
-  }
-
-  void saveTaskMemory();
+  task.lastUpdatedAt = nowIso();
+  scheduleTaskMemorySave();
 }
+
+function addDecision(task, item) {
+  task.decisionLog.push({ ...item, timestamp: nowIso() });
+  if (task.decisionLog.length > 80) task.decisionLog = task.decisionLog.slice(-80);
+}
+
+function setOpenQuestions(task, items) {
+  task.openQuestions = (Array.isArray(items) ? items : []).slice(0, 20);
+}
+
+function setNextActions(task, items) {
+  task.nextActions = (Array.isArray(items) ? items : []).slice(0, 20);
+}
+
+function deriveListsFromTurn(task, next, latestUserPrompt) {
+  if (next.taskComplete) {
+    setOpenQuestions(task, []);
+    setNextActions(task, []);
+    return;
+  }
+
+  const q = [];
+  if (next.reason.includes('未決定') || next.reason.toLowerCase().includes('unknown')) {
+    q.push(next.reason);
+  }
+  if (latestUserPrompt.includes('?') || latestUserPrompt.includes('？')) {
+    q.push(clip(latestUserPrompt, 140));
+  }
+
+  const actions = [];
+  if (next.nextInstruction) actions.push(clip(next.nextInstruction, 220));
+  actions.push(`${next.nextSpeaker} to proceed in ${next.mode} mode`);
+
+  setOpenQuestions(task, Array.from(new Set([...task.openQuestions, ...q])).slice(-10));
+  setNextActions(task, Array.from(new Set(actions)).slice(-10));
+}
+
+function getRunState(channelId) {
+  if (!channelRunState.has(channelId)) {
+    channelRunState.set(channelId, { running: false, queue: [] });
+  }
+  return channelRunState.get(channelId);
+}
+
+async function enqueueMeetingRun(channel, latestUserPrompt, invocationMode) {
+  const state = getRunState(channel.id);
+  const payload = { latestUserPrompt, invocationMode };
+
+  if (state.running) {
+    state.queue.push(payload);
+    await sendAsBot(
+      coordinator,
+      channel.id,
+      `別の実行が進行中のためキューに追加しました。queue=${state.queue.length}`,
+      'Coordinator'
+    );
+    return;
+  }
+
+  state.running = true;
+
+  try {
+    let current = payload;
+    while (current) {
+      await executeMeetingRun(channel, current.latestUserPrompt, current.invocationMode);
+      current = state.queue.shift();
+    }
+  } finally {
+    state.running = false;
+  }
+}
+
+// =========================================================
+// context builders / routing
+// =========================================================
 
 function buildHistoryContext(channelId, maxItems = 10) {
   const task = taskMemory.get(channelId);
@@ -353,191 +594,183 @@ function buildHistoryContext(channelId, maxItems = 10) {
 
   return task.history
     .slice(-maxItems)
-    .map((item, index) => {
-      return [
-        `History ${index + 1}`,
-        `Role: ${item.role}`,
-        `Mode: ${item.mode}`,
-        `Content: ${clip(item.content, 700)}`,
-      ].join('\n');
-    })
+    .map((item, index) => [
+      `History ${index + 1}`,
+      `Role: ${item.role}`,
+      `Mode: ${item.mode}`,
+      `Content: ${clip(item.content, 700)}`,
+    ].join('\n'))
     .join('\n\n');
 }
 
 function buildUserProfileContext() {
-  if (!userProfile || Object.keys(userProfile).length === 0) {
-    return 'No user profile available.';
-  }
-
+  if (!userProfile || Object.keys(userProfile).length === 0) return 'No user profile available.';
   return JSON.stringify(userProfile, null, 2);
 }
 
 function taskTypeHint(taskType) {
   const hints = {
-    general:
-      '一般的な相談、整理、方向性設計、実務補助として扱ってください。',
-    research:
-      '研究テーマ、文献、理論枠組み、方法論、研究計画、論理構成を重視してください。',
-    grant:
-      '助成金、公募、申請文、審査視点、締切、要件、実現可能性を重視してください。',
-    website:
-      'Webサイト、情報設計、掲載内容、導線、ブランド表現、構成を重視してください。',
-    marketing:
-      '発信戦略、ターゲット、訴求角度、投稿案、導線を重視してください。',
-    admin:
-      '事務処理、テンプレート、手順、抜け漏れ防止、実務整理を重視してください。',
+    general: '一般的な相談、整理、方向性設計、実務補助として扱ってください。',
+    research: '研究テーマ、文献、理論枠組み、方法論、研究計画、論理構成を重視してください。',
+    grant: '助成金、公募、申請文、審査視点、締切、要件、実現可能性を重視してください。',
+    website: 'Webサイト、情報設計、掲載内容、導線、ブランド表現、構成を重視してください。',
+    marketing: '発信戦略、ターゲット、訴求角度、投稿案、導線を重視してください。',
+    admin: '事務処理、テンプレート、手順、抜け漏れ防止、実務整理を重視してください。',
   };
-
   return hints[taskType] || hints.general;
 }
 
-async function notionSearch(query) {
-  try {
-    const response = await notion.search({
-      query,
-      page_size: 10,
-    });
+async function shouldAutoRespond(message) {
+  const content = message.content?.trim();
+  if (!content) return { shouldRespond: false, reason: 'empty', isNewTask: false };
 
-    return response.results || [];
-  } catch (error) {
-    console.error('Notion search failed:', error.message);
-    return [];
+  const channelName = message.channel?.name || '';
+
+  if (channelName.startsWith('task-')) {
+    const commandLike =
+      content === '!run' ||
+      content === '!continue' ||
+      content.startsWith('!run ') ||
+      content.startsWith('!continue ');
+    return {
+      shouldRespond: commandLike,
+      reason: commandLike ? 'task command message' : 'task channel requires !run/!continue',
+      isNewTask: false,
+    };
   }
-}
 
-function formatNotionSearchResults(results) {
-  if (!results.length) {
-    return 'No Notion results found.';
+  if (isLikelyTrivialMessage(content)) {
+    return { shouldRespond: false, reason: 'trivial prefilter', isNewTask: false };
   }
 
-  return results
-    .map((item, index) => {
-      const title =
-        item.object === 'page'
-          ? (item.properties?.title?.title?.[0]?.plain_text ||
-             item.properties?.Name?.title?.[0]?.plain_text ||
-             item.url ||
-             'Untitled page')
-          : item.url || 'Untitled';
+  const systemPrompt = `
+あなたは Discord Auto Router です。
+役割は、このメッセージが「botチームに依頼して処理すべき内容」か判断することです。
 
-      return `${index + 1}. ${title}\n${item.url || ''}`;
-    })
-    .join('\n\n');
+ルール:
+- 雑談、独り言、短い相槌、感想なら shouldRespond = false
+- 相談、依頼、質問、作業、整理、情報収集、計画、文章作成なら shouldRespond = true
+- 新しい task チャンネルを作る必要がありそうなら isNewTask = true
+- 必ず JSON だけ返す
+
+形式:
+{
+  "shouldRespond": true,
+  "reason": "short reason",
+  "isNewTask": true
+}
+`;
+
+  const userPrompt = `
+channel:
+${channelName}
+
+message:
+${content}
+
+userProfile:
+${buildUserProfileContext()}
+`;
+
+  const parsed = await safeJsonFromGroq(systemPrompt, userPrompt, {
+    shouldRespond: false,
+    reason: 'fallback ignore',
+    isNewTask: false,
+  });
+
+  return {
+    shouldRespond: Boolean(parsed.shouldRespond),
+    reason: parsed.reason || 'No reason',
+    isNewTask: Boolean(parsed.isNewTask),
+  };
 }
 
-async function searchTavily(query) {
-  try {
-    const res = await fetch('https://api.tavily.com/search', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${TAVILY_API_KEY}`,
-      },
-      body: JSON.stringify({
-        query,
-        topic: 'general',
-        search_depth: 'advanced',
-        max_results: 5,
-        include_answer: true,
-      }),
-    });
+async function classifyTaskType(messageContent) {
+  const systemPrompt = `
+あなたは Task Type Router です。
+役割は、ユーザーの依頼を最も適切な taskType に分類することです。
 
-    if (!res.ok) {
-      const text = await res.text();
-      return `Scout error: ${res.status} ${text}`;
-    }
+選べる taskType:
+- research
+- grant
+- website
+- marketing
+- admin
+- general
 
-    const data = await res.json();
-    const answer = data.answer ? `Summary:\n${data.answer}\n\n` : '';
-    const results = Array.isArray(data.results) ? data.results : [];
+必ず JSON だけ返してください。
+`;
 
-    if (!results.length) {
-      return `${answer}No useful results found.`;
-    }
+  const userPrompt = `
+message:
+${messageContent}
 
-    return (
-      answer +
-      results
-        .map((r, i) => {
-          return `${i + 1}. ${r.title || 'Untitled'}\n${r.url || ''}\n${clip(r.content || '', 300)}`;
-        })
-        .join('\n\n')
-    );
-  } catch (error) {
-    return `Scout error: ${error.message}`;
-  }
-}
-function isModelLimitError(error) {
-  const msg = String(error?.message || '').toLowerCase();
+userProfile:
+${buildUserProfileContext()}
+`;
 
-  return (
-    msg.includes('429') ||
-    msg.includes('413') ||
-    msg.includes('503') ||
-    msg.includes('quota') ||
-    msg.includes('rate') ||
-    msg.includes('credit') ||
-    msg.includes('insufficient') ||
-    msg.includes('too large') ||
-    msg.includes('timeout') ||
-    msg.includes('unavailable') ||
-    msg.includes('high demand') ||
-    msg.includes('overloaded') ||
-    msg.includes('try again later')
-  );
+  const parsed = await safeJsonFromGroq(systemPrompt, userPrompt, {
+    taskType: 'general',
+    reason: 'fallback general',
+  });
+
+  const allowed = ['research', 'grant', 'website', 'marketing', 'admin', 'general'];
+  return {
+    taskType: allowed.includes(parsed.taskType) ? parsed.taskType : 'general',
+    reason: parsed.reason || 'No reason',
+  };
 }
 
-function isProviderFailureText(text) {
-  const msg = String(text || '').toLowerCase();
-  return (
-    msg.includes('groq error:') ||
-    msg.includes('scout error:') ||
-    msg.includes('model temporarily unavailable') ||
-    msg.includes('provider unavailable')
-  );
-}
+// =========================================================
+// llm / external calls
+// =========================================================
 
 async function askGroq(systemPrompt, userPrompt, options = {}) {
-  const {
-    model = TEXT_MODEL,
-    temperature = 0.6,
-    max_tokens = 900,
-  } = options;
+  const { model = TEXT_MODEL, temperature = 0.6, max_tokens = 900 } = options;
 
   try {
-    const response = await groq.chat.completions.create({
-      model,
-      temperature,
-      max_tokens,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-    });
+    const response = await retryAsync(
+      () => withTimeout(
+        () => groq.chat.completions.create({
+          model,
+          temperature,
+          max_tokens,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+        }),
+        REQUEST_TIMEOUT_MS,
+        'groq completion'
+      ),
+      { retries: API_RETRIES, label: 'askGroq' }
+    );
 
     return response.choices?.[0]?.message?.content || '(no response)';
   } catch (error) {
     console.error('askGroq error:', error?.message || error);
-
-    if (isModelLimitError(error)) {
-      return 'Groq error: model temporarily unavailable or rate-limited. Please stop and try later.';
-    }
-
     return `Groq error: ${error?.message || 'unknown error'}`;
   }
 }
 
 async function safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject) {
   try {
-    const response = await groq.chat.completions.create({
-      model: JSON_MODEL,
-      temperature: 0.2,
-      max_tokens: 500,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-    });
+    const response = await retryAsync(
+      () => withTimeout(
+        () => groq.chat.completions.create({
+          model: JSON_MODEL,
+          temperature: 0.2,
+          max_tokens: 500,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+        }),
+        REQUEST_TIMEOUT_MS,
+        'groq json completion'
+      ),
+      { retries: API_RETRIES, label: 'safeJsonFromGroq' }
+    );
 
     const raw = response.choices?.[0]?.message?.content || '{}';
     const match = raw.match(/\{[\s\S]*\}/);
@@ -548,52 +781,95 @@ async function safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject) {
   }
 }
 
+async function notionSearch(query) {
+  try {
+    const response = await retryAsync(
+      () => withTimeout(
+        () => notion.search({ query, page_size: 10 }),
+        REQUEST_TIMEOUT_MS,
+        'notion search'
+      ),
+      { retries: API_RETRIES, label: 'notion search' }
+    );
+    return response.results || [];
+  } catch (error) {
+    console.error('Notion search failed:', error.message);
+    return [];
+  }
+}
+
+function formatNotionSearchResults(results) {
+  if (!results.length) return 'No Notion results found.';
+  return results
+    .map((item, index) => {
+      const title =
+        item.object === 'page'
+          ? item.properties?.title?.title?.[0]?.plain_text || item.properties?.Name?.title?.[0]?.plain_text || item.url || 'Untitled page'
+          : item.url || 'Untitled';
+
+      return `${index + 1}. ${title}\n${item.url || ''}`;
+    })
+    .join('\n\n');
+}
+
+async function searchTavily(query) {
+  try {
+    const res = await retryAsync(
+      () => withTimeout(
+        () => fetch('https://api.tavily.com/search', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${TAVILY_API_KEY}`,
+          },
+          body: JSON.stringify({
+            query,
+            topic: 'general',
+            search_depth: 'advanced',
+            max_results: 5,
+            include_answer: true,
+          }),
+        }),
+        REQUEST_TIMEOUT_MS,
+        'tavily search'
+      ),
+      { retries: API_RETRIES, label: 'tavily search' }
+    );
+
+    if (!res.ok) return `Scout error: ${res.status} ${await res.text()}`;
+
+    const data = await res.json();
+    const answer = data.answer ? `Summary:\n${data.answer}\n\n` : '';
+    const results = Array.isArray(data.results) ? data.results : [];
+
+    if (!results.length) return `${answer}No useful results found.`;
+
+    return answer + results
+      .map((r, i) => `${i + 1}. ${r.title || 'Untitled'}\n${r.url || ''}\n${clip(r.content || '', 300)}`)
+      .join('\n\n');
+  } catch (error) {
+    return `Scout error: ${error.message}`;
+  }
+}
+
 async function updateHistorySummary(channelId) {
   const task = taskMemory.get(channelId);
   if (!task) return;
 
-  const historyContext = buildHistoryContext(channelId, 14);
-
-  const systemPrompt = `
-あなたは Memory Summariser です。
-役割は、長い履歴から今後の作業に必要な要点だけを圧縮して残すことです。
-
-必ず短く整理してください。
-1. 依頼の核心
-2. すでに決まったこと
-3. 未決定のこと
-4. 現在の方向
-5. 次に重要なこと
-
-冗長な説明や雑談は入れないでください。
-150〜300語程度で十分です。
-`;
-
-  const userPrompt = `
-taskType:
-${task.taskType}
-
-title:
-${task.title}
-
-original prompt:
-${task.prompt}
-
-history:
-${historyContext}
-`;
-
-  const text = await askGroq(systemPrompt, userPrompt, {
-    model: TEXT_MODEL,
-    temperature: 0.3,
-    max_tokens: 500,
-  });
+  const text = await askGroq(
+    `あなたは Memory Summariser です。長い履歴から今後の作業に必要な要点を圧縮してください。`,
+    `taskType:\n${task.taskType}\ntitle:\n${task.title}\noriginal prompt:\n${task.prompt}\nhistory:\n${buildHistoryContext(channelId, 14)}`,
+    { model: TEXT_MODEL, temperature: 0.3, max_tokens: 500 }
+  );
 
   if (!isProviderFailureText(text)) {
-    task.historySummary = text;
-    void saveTaskMemory();
+    touchTask(task, { historySummary: text });
   }
 }
+
+// =========================================================
+// bot prompts
+// =========================================================
 
 const sparkSystem = `
 あなたの名前は Spark です。
@@ -635,7 +911,8 @@ const coordinatorSystem = `
 `;
 
 async function askScoutSearchDecision(taskType, prompt, existingEvidence = '') {
-  const systemPrompt = `
+  const parsed = await safeJsonFromGroq(
+    `
 あなたは Scout Judge です。
 役割は「この依頼に外部検索が必要かどうか」と
 「今この場で新しく検索し直すべきか」を判断することです。
@@ -658,32 +935,17 @@ async function askScoutSearchDecision(taskType, prompt, existingEvidence = '') {
   "query": "search query",
   "confidence": "high"
 }
-`;
-
-  const userPrompt = `
-taskType:
-${taskType}
-
-prompt:
-${prompt}
-
-existingEvidence:
-${existingEvidence || 'none'}
-
-userProfile:
-${buildUserProfileContext()}
-`;
-
-  const fallbackObject = {
-    needSearch: false,
-    needFreshSearch: false,
-    canUseExistingEvidence: Boolean(existingEvidence),
-    reason: 'Fallback decision',
-    query: '',
-    confidence: 'low',
-  };
-
-  const parsed = await safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject);
+`,
+    `taskType:\n${taskType}\nprompt:\n${prompt}\nexistingEvidence:\n${existingEvidence || 'none'}\nuserProfile:\n${buildUserProfileContext()}`,
+    {
+      needSearch: false,
+      needFreshSearch: false,
+      canUseExistingEvidence: Boolean(existingEvidence),
+      reason: 'Fallback decision',
+      query: '',
+      confidence: 'low',
+    }
+  );
 
   return {
     needSearch: Boolean(parsed.needSearch),
@@ -696,11 +958,8 @@ ${buildUserProfileContext()}
 }
 
 async function askCoordinatorNextStep(task, latestUserPrompt, turnCount) {
-  const historyContext = buildHistoryContext(task.channelId, 10);
-  const historySummary = task.historySummary || 'No summary.';
-  const scoutEvidence = task.scoutEvidence || '検索なし';
-
-  const systemPrompt = `
+  const parsed = await safeJsonFromGroq(
+    `
 あなたは Coordinator Decision Engine です。
 役割は、会議の現在地点を見て次に誰が話すべきかを決めることです。
 
@@ -730,46 +989,16 @@ async function askCoordinatorNextStep(task, latestUserPrompt, turnCount) {
   "reason": "short reason",
   "nextInstruction": "specific instruction"
 }
-`;
-
-  const userPrompt = `
-taskType:
-${task.taskType}
-
-taskHint:
-${taskTypeHint(task.taskType)}
-
-userProfile:
-${buildUserProfileContext()}
-
-originalPrompt:
-${task.prompt}
-
-latestUserPrompt:
-${latestUserPrompt}
-
-historySummary:
-${historySummary}
-
-recentHistory:
-${historyContext}
-
-scoutEvidence:
-${scoutEvidence}
-
-turnCount:
-${turnCount}
-`;
-
-  const fallbackObject = {
-    nextSpeaker: 'none',
-    taskComplete: true,
-    mode: 'discussion',
-    reason: 'Fallback completion',
-    nextInstruction: '',
-  };
-
-  const parsed = await safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject);
+`,
+    `taskType:\n${task.taskType}\ntaskHint:\n${taskTypeHint(task.taskType)}\nuserProfile:\n${buildUserProfileContext()}\noriginalPrompt:\n${task.prompt}\nlatestUserPrompt:\n${latestUserPrompt}\nhistorySummary:\n${task.historySummary || 'No summary.'}\nrecentHistory:\n${buildHistoryContext(task.channelId, 10)}\nscoutEvidence:\n${task.scoutEvidence || '検索なし'}\nturnCount:\n${turnCount}`,
+    {
+      nextSpeaker: 'none',
+      taskComplete: true,
+      mode: 'discussion',
+      reason: 'Fallback completion',
+      nextInstruction: '',
+    }
+  );
 
   return {
     nextSpeaker: parsed.nextSpeaker || 'none',
@@ -781,144 +1010,67 @@ ${turnCount}
 }
 
 async function askCoordinatorFinalSummary(task, latestUserPrompt) {
-  const historyContext = buildHistoryContext(task.channelId, 12);
-  const historySummary = task.historySummary || 'No summary.';
-
-  const userPrompt = `
-タスク種別:
-${task.taskType}
-
-補足:
-${taskTypeHint(task.taskType)}
-
-ユーザープロフィール:
-${buildUserProfileContext()}
-
-元の依頼:
-${task.prompt}
-
-最新の追加依頼:
-${latestUserPrompt}
-
-圧縮された履歴要約:
-${historySummary}
-
-最近の履歴:
-${historyContext}
-`;
-
-  return await askGroq(coordinatorSystem, userPrompt, {
-    model: TEXT_MODEL,
-    temperature: 0.4,
-    max_tokens: 700,
-  });
+  return askGroq(
+    coordinatorSystem,
+    `タスク種別:\n${task.taskType}\n補足:\n${taskTypeHint(task.taskType)}\nユーザープロフィール:\n${buildUserProfileContext()}\n元の依頼:\n${task.prompt}\n最新の追加依頼:\n${latestUserPrompt}\n圧縮された履歴要約:\n${task.historySummary || 'No summary.'}\n最近の履歴:\n${buildHistoryContext(task.channelId, 12)}`,
+    { model: TEXT_MODEL, temperature: 0.4, max_tokens: 700 }
+  );
 }
 
 async function askAgentResponse(role, instruction, task, mode) {
-  const historyContext = buildHistoryContext(task.channelId, 10);
-  const historySummary = task.historySummary || 'No summary.';
-  const scoutEvidence = task.scoutEvidence || '検索なし';
+  const basePrompt = `
+タスク種別:\n${task.taskType}
+補足:\n${taskTypeHint(task.taskType)}
+ユーザープロフィール:\n${buildUserProfileContext()}
+圧縮された過去要約:\n${task.historySummary || 'No summary.'}
+過去ログ:\n${buildHistoryContext(task.channelId, 10)}
+Scout の検索結果:\n${task.scoutEvidence || '検索なし'}
+Coordinator instruction:\n${instruction}
+現在モード:\n${mode}
+`;
 
   if (role === 'Scout') {
-    const decision = await askScoutSearchDecision(
-      task.taskType,
-      `${task.prompt}\n\nCoordinator instruction:\n${instruction}`,
-      scoutEvidence
-    );
+    const decision = await askScoutSearchDecision(task.taskType, `${task.prompt}\n\nCoordinator instruction:\n${instruction}`, task.scoutEvidence || '');
 
-    const decisionText = `検索判断:
-needSearch: ${decision.needSearch}
-needFreshSearch: ${decision.needFreshSearch}
-canUseExistingEvidence: ${decision.canUseExistingEvidence}
-confidence: ${decision.confidence}
-reason: ${decision.reason}
-query: ${decision.query || '(none)'}`;
-
-    let finalText = decisionText;
+    let finalText = `検索判断:\nneedSearch: ${decision.needSearch}\nneedFreshSearch: ${decision.needFreshSearch}\ncanUseExistingEvidence: ${decision.canUseExistingEvidence}\nconfidence: ${decision.confidence}\nreason: ${decision.reason}\nquery: ${decision.query || '(none)'}`;
 
     if (!decision.needSearch) {
-      finalText += `\n\n検索は不要と判断。`;
-    } else if (
-      decision.canUseExistingEvidence &&
-      task.scoutEvidence &&
-      !decision.needFreshSearch
-    ) {
-      finalText += `\n\n既存の検索結果を再利用します。`;
-    } else {
-      const query = decision.query || instruction || task.prompt;
-      const webEvidence = await searchTavily(query);
-      const notionResults = await notionSearch(query);
-      const notionEvidence = formatNotionSearchResults(notionResults);
-
-      const evidence = `Web results:\n${webEvidence}\n\nNotion results:\n${notionEvidence}`;
-      task.scoutEvidence = evidence;
-      void saveTaskMemory();
-
-      finalText += `\n\n検索結果:\n${evidence}`;
+      finalText += '\n\n検索は不要と判断。';
+      return finalText;
     }
 
+    if (decision.canUseExistingEvidence && task.scoutEvidence && !decision.needFreshSearch) {
+      finalText += '\n\n既存の検索結果を再利用します。';
+      return finalText;
+    }
+
+    const query = decision.query || instruction || task.prompt;
+    const webEvidence = await searchTavily(query);
+    const notionEvidence = formatNotionSearchResults(await notionSearch(query));
+
+    const evidence = `Web results:\n${webEvidence}\n\nNotion results:\n${notionEvidence}`;
+    touchTask(task, { scoutEvidence: evidence });
+
+    finalText += `\n\n検索結果:\n${evidence}`;
     return finalText;
   }
 
-  const basePrompt = `
-タスク種別:
-${task.taskType}
-
-補足:
-${taskTypeHint(task.taskType)}
-
-ユーザープロフィール:
-${buildUserProfileContext()}
-
-圧縮された過去要約:
-${historySummary}
-
-過去ログ:
-${historyContext}
-
-Scout の検索結果:
-${scoutEvidence}
-
-Coordinator instruction:
-${instruction}
-
-現在モード:
-${mode}
-`;
-
   if (role === 'Spark') {
-    return await askGroq(sparkSystem, basePrompt, {
-      model: TEXT_MODEL,
-      temperature: 0.7,
-      max_tokens: 700,
-    });
+    return askGroq(sparkSystem, basePrompt, { model: TEXT_MODEL, temperature: 0.7, max_tokens: 700 });
   }
-
   if (role === 'Forge') {
-    return await askGroq(
-      forgeSystem,
-      `${basePrompt}
-
-前回までの要約:
-${task.summary || 'なし'}`,
-      {
-        model: TEXT_MODEL,
-        temperature: 0.5,
-        max_tokens: 900,
-      }
-    );
-  }
-
-  if (role === 'Mirror') {
-    return await askGroq(mirrorSystem, basePrompt, {
+    return askGroq(forgeSystem, `${basePrompt}\n前回までの要約:\n${task.summary || 'なし'}`, {
       model: TEXT_MODEL,
-      temperature: 0.4,
-      max_tokens: 700,
+      temperature: 0.5,
+      max_tokens: 900,
     });
   }
-
+  if (role === 'Mirror') {
+    return askGroq(mirrorSystem, basePrompt, { model: TEXT_MODEL, temperature: 0.4, max_tokens: 700 });
+  }
   return '(no response)';
 }
+
 function roleClient(role) {
   if (role === 'Scout') return scout;
   if (role === 'Spark') return spark;
@@ -927,272 +1079,223 @@ function roleClient(role) {
   return coordinator;
 }
 
-async function runDynamicMeeting(channel, latestUserPrompt, invocationMode) {
+// =========================================================
+// discord send helpers
+// =========================================================
+
+async function getChannel(botClient, channelId) {
+  let channel = botClient.channels.cache.get(channelId);
+  if (!channel) channel = await botClient.channels.fetch(channelId);
+  if (!channel) throw new Error(`Channel not found: ${channelId}`);
+  return channel;
+}
+
+async function sendAsBot(botClient, channelId, text, label = '') {
+  const channel = await retryAsync(
+    () => withTimeout(() => getChannel(botClient, channelId), SEND_TIMEOUT_MS, 'fetch discord channel'),
+    { retries: SEND_RETRIES, label: 'resolve discord channel' }
+  );
+
+  const chunks = splitLongText(text);
+  for (let i = 0; i < chunks.length; i++) {
+    const prefix = i === 0 || !label ? '' : `[${label} cont. ${i + 1}]\n`;
+    await retryAsync(
+      () => withTimeout(() => channel.send(prefix + chunks[i]), SEND_TIMEOUT_MS, 'discord send'),
+      { retries: SEND_RETRIES, label: 'discord send' }
+    );
+  }
+}
+
+async function safeCoordinatorStop(channelId, text) {
+  try {
+    await sendAsBot(coordinator, channelId, text, 'Coordinator');
+  } catch (error) {
+    console.error('Failed to send stop message:', error.message || error);
+  }
+}
+
+// =========================================================
+// meeting orchestration
+// =========================================================
+
+async function executeMeetingRun(channel, latestUserPrompt, invocationMode) {
   const task = getTask(channel.id);
 
   if (!task) {
-    await sendAsBot(
-      coordinator,
-      channel.id,
-      'このチャンネルにタスク情報がありません。新しく /starttask して。',
-      'Coordinator'
-    );
+    await safeCoordinatorStop(channel.id, 'このチャンネルにタスク情報がありません。新しく /starttask してください。');
     return;
   }
 
-  task.channelId = channel.id;
-  task.cycleCount = 0;
-  void saveTaskMemory();
+  const runId = makeRunId(channel.id);
+  touchTask(task, {
+    channelId: channel.id,
+    cycleCount: 0,
+    status: 'running',
+    activeSpeaker: 'Coordinator',
+    runId,
+  });
 
-  await updateHistorySummary(channel.id);
+  scheduleTaskMemorySave({ immediate: true });
 
-  for (let turn = 1; turn <= MAX_DYNAMIC_TURNS; turn++) {
-    task.cycleCount = turn;
-    void saveTaskMemory();
+  try {
+    await updateHistorySummary(channel.id);
 
-    const next = await askCoordinatorNextStep(
-      task,
-      latestUserPrompt,
-      task.cycleCount
-    );
+    for (let turn = 1; turn <= MAX_DYNAMIC_TURNS; turn++) {
+      touchTask(task, { cycleCount: turn, activeSpeaker: 'Coordinator' });
 
-    const coordinatorDecisionText = `会議判断:
-turn: ${task.cycleCount}
-nextSpeaker: ${next.nextSpeaker}
-mode: ${next.mode}
-taskComplete: ${next.taskComplete}
-reason: ${next.reason}
-nextInstruction: ${next.nextInstruction || '(none)'}`;
+      const next = await askCoordinatorNextStep(task, latestUserPrompt, task.cycleCount);
 
-    await sendAsBot(coordinator, channel.id, coordinatorDecisionText, 'Coordinator');
-    appendHistory(channel.id, 'Coordinator', 'control', coordinatorDecisionText);
+      addDecision(task, {
+        runId,
+        turn,
+        invocationMode,
+        nextSpeaker: next.nextSpeaker,
+        mode: next.mode,
+        taskComplete: next.taskComplete,
+        reason: next.reason,
+        nextInstruction: next.nextInstruction,
+      });
+      deriveListsFromTurn(task, next, latestUserPrompt);
 
-    if (next.taskComplete || next.nextSpeaker === 'none') {
-      const finalSummary = await askCoordinatorFinalSummary(task, latestUserPrompt);
-      await sendAsBot(coordinator, channel.id, finalSummary, 'Coordinator');
-      appendHistory(channel.id, 'Coordinator', 'summary', finalSummary);
+      const coordinatorDecisionText = `会議判断:\nturn: ${task.cycleCount}\nnextSpeaker: ${next.nextSpeaker}\nmode: ${next.mode}\ntaskComplete: ${next.taskComplete}\nreason: ${next.reason}\nnextInstruction: ${next.nextInstruction || '(none)'}`;
 
-      task.summary = finalSummary;
-      await updateHistorySummary(channel.id);
-      void saveTaskMemory();
-      return;
+      await sendAsBot(coordinator, channel.id, coordinatorDecisionText, 'Coordinator');
+      appendHistory(channel.id, 'Coordinator', 'control', coordinatorDecisionText);
+
+      if (next.taskComplete || next.nextSpeaker === 'none') {
+        const finalSummary = await askCoordinatorFinalSummary(task, latestUserPrompt);
+        await sendAsBot(coordinator, channel.id, finalSummary, 'Coordinator');
+        appendHistory(channel.id, 'Coordinator', 'summary', finalSummary);
+
+        touchTask(task, {
+          summary: finalSummary,
+          status: 'waiting',
+          activeSpeaker: 'none',
+          runId,
+        });
+        setOpenQuestions(task, []);
+        setNextActions(task, []);
+
+        await updateHistorySummary(channel.id);
+        scheduleTaskMemorySave({ immediate: true });
+        return;
+      }
+
+      const speaker = next.nextSpeaker;
+      const mode = next.mode;
+      const instruction = next.nextInstruction || latestUserPrompt;
+
+      touchTask(task, { activeSpeaker: speaker });
+      const output = await askAgentResponse(speaker, instruction, task, mode);
+
+      await sendAsBot(roleClient(speaker), channel.id, output, speaker);
+      appendHistory(channel.id, speaker, mode, output);
+
+      if (isProviderFailureText(output)) {
+        touchTask(task, { status: 'error', activeSpeaker: 'none' });
+        const stopText = '外部APIの失敗が続いたため安全停止します。しばらく待ってから /continue または /resume を使ってください。';
+        await safeCoordinatorStop(channel.id, stopText);
+        appendHistory(channel.id, 'Coordinator', 'control', stopText);
+        scheduleTaskMemorySave({ immediate: true });
+        return;
+      }
+
+      if (speaker === 'Forge' && mode === 'execution') {
+        touchTask(task, { lastExecution: output });
+      }
     }
 
-    const speaker = next.nextSpeaker;
-    const mode = next.mode;
-    const instruction = next.nextInstruction || latestUserPrompt;
-
-    const output = await askAgentResponse(speaker, instruction, task, mode);
-    await sendAsBot(roleClient(speaker), channel.id, output, speaker);
-    appendHistory(channel.id, speaker, mode, output);
-
-    if (isProviderFailureText(output)) {
-      const stopText =
-        'モデル側の混雑または利用上限に当たりました。ここで停止します。しばらく待ってから /continue または /resume を使ってください。';
-      await sendAsBot(coordinator, channel.id, stopText, 'Coordinator');
-      appendHistory(channel.id, 'Coordinator', 'control', stopText);
-      return;
-    }
-
-    if (speaker === 'Forge' && mode === 'execution') {
-      task.lastExecution = output;
-      void saveTaskMemory();
-    }
+    touchTask(task, { status: 'waiting', activeSpeaker: 'none' });
+    const stopText = '安全上限に達したため、ここで会議を停止します。必要なら /continue または /resume で再開してください。';
+    await safeCoordinatorStop(channel.id, stopText);
+    appendHistory(channel.id, 'Coordinator', 'control', stopText);
+    scheduleTaskMemorySave({ immediate: true });
+  } catch (error) {
+    console.error('executeMeetingRun failed:', error.message || error);
+    touchTask(task, { status: 'error', activeSpeaker: 'none' });
+    await safeCoordinatorStop(channel.id, `実行中にエラーが発生したため停止しました: ${error.message}`);
+    appendHistory(channel.id, 'Coordinator', 'control', `Run error: ${error.message}`);
+    scheduleTaskMemorySave({ immediate: true });
   }
-
-  const stopText =
-    '安全上限に達したため、ここで会議を停止します。必要なら /continue または /resume で再開してください。';
-  await sendAsBot(coordinator, channel.id, stopText, 'Coordinator');
-  appendHistory(channel.id, 'Coordinator', 'control', stopText);
 }
 
 async function runResume(channel) {
   const task = getTask(channel.id);
-
   if (!task) {
-    await sendAsBot(
-      coordinator,
-      channel.id,
-      'このチャンネルの保存済みタスクが見つかりません。',
-      'Coordinator'
-    );
+    await safeCoordinatorStop(channel.id, 'このチャンネルの保存済みタスクが見つかりません。');
     return;
   }
 
-  const resumeText = `保存済みメモリから再開します。
-
-taskType: ${task.taskType}
-title: ${task.title}
-
-original prompt:
-${task.prompt}
-
-latest summary:
-${task.summary || 'なし'}
-
-history summary:
-${task.historySummary || 'なし'}
-
-last execution:
-${task.lastExecution || 'なし'}`;
+  const resumeText = `保存済みメモリから再開します。\n\nstatus: ${task.status}\ntaskType: ${task.taskType}\ntitle: ${task.title}\n\nlatest summary:\n${task.summary || 'なし'}\n\nhistory summary:\n${task.historySummary || 'なし'}\n\nopenQuestions:\n${(task.openQuestions || []).join('\n') || 'なし'}\n\nnextActions:\n${(task.nextActions || []).join('\n') || 'なし'}\n\nlast execution:\n${task.lastExecution || 'なし'}`;
 
   await sendAsBot(coordinator, channel.id, resumeText, 'Coordinator');
   appendHistory(channel.id, 'Coordinator', 'resume', resumeText);
 
-  task.cycleCount = 0;
-  void saveTaskMemory();
+  touchTask(task, { cycleCount: 0, status: 'idle' });
 
-  const resumePrompt = `
-保存済みメモリを踏まえて、このタスクを再開してください。
+  const resumePrompt = `保存済みメモリを踏まえて、このタスクを再開してください。\n\n元の依頼:\n${task.prompt}\n\n現在の要約:\n${task.summary || 'なし'}\n\nopenQuestions:\n${(task.openQuestions || []).join('\n') || 'なし'}\n\nnextActions:\n${(task.nextActions || []).join('\n') || 'なし'}\n\n必要なら修正、補強、続行を行ってください。`;
 
-元の依頼:
-${task.prompt}
-
-現在の要約:
-${task.summary || 'なし'}
-
-直近の実行内容:
-${task.lastExecution || 'なし'}
-
-必要なら修正、補強、続行を行ってください。
-`;
-
-  await runDynamicMeeting(channel, resumePrompt, 'resume');
+  await enqueueMeetingRun(channel, resumePrompt, 'resume');
 }
 
-async function shouldAutoRespond(message) {
-  if (!message.content?.trim()) {
-    return {
-      shouldRespond: false,
-      reason: 'empty',
-      isNewTask: false,
-    };
-  }
+// =========================================================
+// channel create helper
+// =========================================================
 
-  const content = message.content.trim();
-
-  if (content.length < 2) {
-    return {
-      shouldRespond: false,
-      reason: 'too short',
-      isNewTask: false,
-    };
-  }
-
-  const channelName = message.channel?.name || '';
-
-  if (channelName.startsWith('task-')) {
-    return {
-      shouldRespond: true,
-      reason: 'task channel',
-      isNewTask: false,
-    };
-  }
-
-  const systemPrompt = `
-あなたは Discord Auto Router です。
-役割は、このメッセージが「botチームに依頼して処理すべき内容」か判断することです。
-
-ルール:
-- 雑談、独り言、短い相槌、感想なら shouldRespond = false
-- 相談、依頼、質問、作業、整理、情報収集、計画、文章作成なら shouldRespond = true
-- 新しい task チャンネルを作る必要がありそうなら isNewTask = true
-- 必ず JSON だけ返す
-
-形式:
-{
-  "shouldRespond": true,
-  "reason": "short reason",
-  "isNewTask": true
-}
-`;
-
-  const userPrompt = `
-channel:
-${channelName}
-
-message:
-${content}
-
-userProfile:
-${buildUserProfileContext()}
-`;
-
-  const fallbackObject = {
-    shouldRespond: false,
-    reason: 'fallback ignore',
-    isNewTask: false,
-  };
-
-  const parsed = await safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject);
-
-  return {
-    shouldRespond: Boolean(parsed.shouldRespond),
-    reason: parsed.reason || 'No reason',
-    isNewTask: Boolean(parsed.isNewTask),
-  };
-}
-
-async function classifyTaskType(messageContent) {
-  const systemPrompt = `
-あなたは Task Type Router です。
-役割は、ユーザーの依頼を最も適切な taskType に分類することです。
-
-選べる taskType:
-- research
-- grant
-- website
-- marketing
-- admin
-- general
-
-分類基準:
-- research: 論文、研究、文献、分析、学術、方法論、アイデア整理
-- grant: 助成金、公募、申請、審査、予算、締切
-- website: Webサイト、構成、掲載内容、デザイン、導線
-- marketing: SNS、広報、告知、投稿、宣伝、ターゲット
-- admin: 手続き、事務、メール、契約、書類、スケジュール整理
-- general: 上記に明確に当てはまらない一般相談
-
-必ず JSON だけ返してください。
-
-形式:
-{
-  "taskType": "general",
-  "reason": "short reason"
-}
-`;
-
-  const userPrompt = `
-message:
-${messageContent}
-
-userProfile:
-${buildUserProfileContext()}
-`;
-
-  const fallbackObject = {
-    taskType: 'general',
-    reason: 'fallback general',
-  };
-
-  const parsed = await safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject);
-
-  const allowed = [
-    'research',
-    'grant',
-    'website',
-    'marketing',
-    'admin',
-    'general',
+function buildTaskChannelOverwrites(guild, creatorId) {
+  const overwrites = [
+    {
+      id: guild.roles.everyone.id,
+      deny: [PermissionFlagsBits.ViewChannel],
+    },
+    {
+      id: creatorId,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+      ],
+    },
+    {
+      id: SCOUT_CLIENT_ID,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+    },
+    {
+      id: SPARK_CLIENT_ID,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+    },
+    {
+      id: FORGE_CLIENT_ID,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+    },
+    {
+      id: MIRROR_CLIENT_ID,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+    },
+    {
+      id: COORDINATOR_CLIENT_ID,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+    },
   ];
 
-  return {
-    taskType: allowed.includes(parsed.taskType)
-      ? parsed.taskType
-      : 'general',
-    reason: parsed.reason || 'No reason',
-  };
+  if (TASK_ADMIN_ROLE_ID) {
+    overwrites.push({
+      id: TASK_ADMIN_ROLE_ID,
+      allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+    });
+  }
+
+  return overwrites;
+}
+
+async function createTaskChannel(guild, creatorId, title, taskType, reason) {
+  return guild.channels.create({
+    name: safeChannelName(title),
+    type: ChannelType.GuildText,
+    topic: `Task channel for ${taskType} | title: ${clip(title, 120)}`,
+    reason,
+    permissionOverwrites: buildTaskChannelOverwrites(guild, creatorId),
+  });
 }
 
 async function autoCreateTaskFromMessage(message) {
@@ -1200,53 +1303,34 @@ async function autoCreateTaskFromMessage(message) {
   if (!guild) return;
 
   const prompt = message.content.trim();
-
   const typeDecision = await classifyTaskType(prompt);
   const taskType = typeDecision.taskType;
+  const title = prompt.slice(0, 40).trim() || 'auto-task';
 
-  const title =
-    prompt
-      .slice(0, 30)
-      .replace(/[^\w\s-]/g, '')
-      .trim()
-      .replace(/\s+/g, '-') || 'auto-task';
-
-  const channel = await guild.channels.create({
-    name: safeChannelName(title),
-    type: ChannelType.GuildText,
-    topic: `Auto task from normal message`,
-    reason: `Auto task from ${message.author.tag}`,
-  });
-
-  const task = ensureTask(channel.id, taskType, title, prompt);
-  task.channelId = channel.id;
-  void saveTaskMemory();
-
-  appendHistory(
-    channel.id,
-    'User',
-    'discussion',
-    `Initial request:\n${prompt}`
+  const channel = await createTaskChannel(
+    guild,
+    message.author.id,
+    title,
+    taskType,
+    `Auto task from ${message.author.tag}`
   );
 
-  const intro = `通常メッセージから新しいタスクを開始します。
+  const task = ensureTask(channel.id, taskType, title, prompt);
+  touchTask(task, { channelId: channel.id, originalTitle: title, status: 'idle' });
 
-自動判定 taskType:
-${taskType}
+  appendHistory(channel.id, 'User', 'discussion', `Initial request:\n${prompt}`);
 
-判定理由:
-${typeDecision.reason}
-
-元メッセージ:
-${prompt}
-
-ここから自律会議を開始します。`;
+  const intro = `通常メッセージから新しいタスクを開始します。\n\n自動判定 taskType:\n${taskType}\n\n判定理由:\n${typeDecision.reason}\n\n元メッセージ:\n${prompt}`;
 
   await sendAsBot(coordinator, channel.id, intro, 'Coordinator');
   appendHistory(channel.id, 'Coordinator', 'control', intro);
 
-  await runDynamicMeeting(channel, prompt, 'auto-start');
+  await enqueueMeetingRun(channel, prompt, 'auto-start');
 }
+
+// =========================================================
+// discord handlers
+// =========================================================
 
 async function registerCoordinatorCommands() {
   const rest = new REST({ version: '10' }).setToken(COORDINATOR_BOT_TOKEN);
@@ -1255,83 +1339,39 @@ async function registerCoordinatorCommands() {
     new SlashCommandBuilder()
       .setName('starttask')
       .setDescription('Create dedicated task channel and start autonomous team')
-      .addStringOption(option =>
-        option
-          .setName('task_type')
-          .setDescription('Task type')
-          .setRequired(true)
-          .addChoices(
-            { name: 'general', value: 'general' },
-            { name: 'research', value: 'research' },
-            { name: 'grant', value: 'grant' },
-            { name: 'website', value: 'website' },
-            { name: 'marketing', value: 'marketing' },
-            { name: 'admin', value: 'admin' }
-          )
-      )
-      .addStringOption(option =>
-        option
-          .setName('title')
-          .setDescription('Task title')
-          .setRequired(true)
-      )
-      .addStringOption(option =>
-        option
-          .setName('prompt')
-          .setDescription('What should the team work on?')
-          .setRequired(true)
-      )
+      .addStringOption(option => option.setName('task_type').setDescription('Task type').setRequired(true).addChoices(
+        { name: 'general', value: 'general' },
+        { name: 'research', value: 'research' },
+        { name: 'grant', value: 'grant' },
+        { name: 'website', value: 'website' },
+        { name: 'marketing', value: 'marketing' },
+        { name: 'admin', value: 'admin' }
+      ))
+      .addStringOption(option => option.setName('title').setDescription('Task title').setRequired(true))
+      .addStringOption(option => option.setName('prompt').setDescription('What should the team work on?').setRequired(true))
       .toJSON(),
 
     new SlashCommandBuilder()
       .setName('continue')
       .setDescription('Continue autonomous team in current task channel')
-      .addStringOption(option =>
-        option
-          .setName('prompt')
-          .setDescription('What should the team do next?')
-          .setRequired(true)
-      )
+      .addStringOption(option => option.setName('prompt').setDescription('What should the team do next?').setRequired(true))
       .toJSON(),
 
-    new SlashCommandBuilder()
-      .setName('resume')
-      .setDescription('Resume current task from saved memory')
-      .toJSON(),
-
-    new SlashCommandBuilder()
-      .setName('finish')
-      .setDescription('Finish task')
-      .toJSON(),
+    new SlashCommandBuilder().setName('resume').setDescription('Resume current task from saved memory').toJSON(),
+    new SlashCommandBuilder().setName('finish').setDescription('Finish task').toJSON(),
   ];
 
-  await rest.put(
-    Routes.applicationGuildCommands(COORDINATOR_CLIENT_ID, DISCORD_GUILD_ID),
-    { body: commands }
-  );
-
+  await rest.put(Routes.applicationGuildCommands(COORDINATOR_CLIENT_ID, DISCORD_GUILD_ID), { body: commands });
   console.log('Coordinator slash commands registered.');
 }
 
-scout.once('clientReady', () => {
-  console.log(`Scout ready: ${scout.user.tag}`);
-});
-
-spark.once('clientReady', () => {
-  console.log(`Spark ready: ${spark.user.tag}`);
-});
-
-forge.once('clientReady', () => {
-  console.log(`Forge ready: ${forge.user.tag}`);
-});
-
-mirror.once('clientReady', () => {
-  console.log(`Mirror ready: ${mirror.user.tag}`);
-});
+scout.once('clientReady', () => console.log(`Scout ready: ${scout.user.tag}`));
+spark.once('clientReady', () => console.log(`Spark ready: ${spark.user.tag}`));
+forge.once('clientReady', () => console.log(`Forge ready: ${forge.user.tag}`));
+mirror.once('clientReady', () => console.log(`Mirror ready: ${mirror.user.tag}`));
 
 coordinator.once('clientReady', async () => {
   console.log(`Coordinator ready: ${coordinator.user.tag}`);
-
   try {
     await registerCoordinatorCommands();
   } catch (error) {
@@ -1347,72 +1387,46 @@ coordinator.on('interactionCreate', async interaction => {
     const title = interaction.options.getString('title', true);
     const prompt = interaction.options.getString('prompt', true);
 
-    await interaction.reply({
-      content: '依頼を受け取りました。専用チャンネルを作成します。',
-      flags: 64,
-    });
+    await interaction.reply({ content: '依頼を受け取りました。専用チャンネルを作成します。', flags: 64 });
 
     queueMicrotask(async () => {
       try {
         const guild = interaction.guild;
-        if (!guild) {
-          console.error('starttask background error: guild not found');
-          return;
-        }
+        if (!guild) return;
 
-        const channel = await guild.channels.create({
-          name: safeChannelName(title),
-          type: ChannelType.GuildText,
-          topic: `Task channel for ${taskType}: ${title}`,
-          reason: `Task requested by ${interaction.user.tag}`,
-        });
-
-        const task = ensureTask(channel.id, taskType, title, prompt);
-        task.channelId = channel.id;
-        void saveTaskMemory();
-
-        appendHistory(
-          channel.id,
-          'User',
-          'discussion',
-          `Initial request:\n${prompt}`
+        const channel = await createTaskChannel(
+          guild,
+          interaction.user.id,
+          title,
+          taskType,
+          `Task requested by ${interaction.user.tag}`
         );
 
-        const startText = `新しいタスクを開始します。
+        const task = ensureTask(channel.id, taskType, title, prompt);
+        touchTask(task, { channelId: channel.id, originalTitle: title, status: 'idle' });
 
-Type: ${taskType}
-Title: ${title}
+        appendHistory(channel.id, 'User', 'discussion', `Initial request:\n${prompt}`);
 
-ここからチームが自律的に会議して、必要なら実行まで進めます。`;
+        const startText = `新しいタスクを開始します。\n\nType: ${taskType}\nTitle: ${title}\n\nここからチームが自律的に会議して、必要なら実行まで進めます。`;
 
         await channel.send(startText);
         appendHistory(channel.id, 'Coordinator', 'control', startText);
 
-        await runDynamicMeeting(channel, prompt, 'start');
+        await enqueueMeetingRun(channel, prompt, 'start');
       } catch (error) {
         console.error('starttask background error:', error);
       }
     });
-
     return;
   }
 
   if (interaction.commandName === 'continue') {
     const prompt = interaction.options.getString('prompt', true);
-
-    await interaction.reply({
-      content: '追加の自律会議を開始します。',
-      flags: 64,
-    });
+    await interaction.reply({ content: '追加の自律会議を開始します。', flags: 64 });
 
     queueMicrotask(async () => {
       try {
-        if (
-          !interaction.channel ||
-          interaction.channel.type !== ChannelType.GuildText
-        ) {
-          return;
-        }
+        if (!interaction.channel || interaction.channel.type !== ChannelType.GuildText) return;
 
         const task = getTask(interaction.channel.id);
         if (!task) {
@@ -1420,39 +1434,23 @@ Title: ${title}
           return;
         }
 
-        task.cycleCount = 0;
-        void saveTaskMemory();
+        touchTask(task, { cycleCount: 0, status: 'idle' });
+        appendHistory(interaction.channel.id, 'User', 'execution', `User follow-up:\n${prompt}`);
 
-        appendHistory(
-          interaction.channel.id,
-          'User',
-          'execution',
-          `User follow-up:\n${prompt}`
-        );
-
-        await runDynamicMeeting(interaction.channel, prompt, 'continue');
+        await enqueueMeetingRun(interaction.channel, prompt, 'continue');
       } catch (error) {
         console.error('continue background error:', error);
       }
     });
-
     return;
   }
 
   if (interaction.commandName === 'resume') {
-    await interaction.reply({
-      content: '保存済みメモリから再開します。',
-      flags: 64,
-    });
+    await interaction.reply({ content: '保存済みメモリから再開します。', flags: 64 });
 
     queueMicrotask(async () => {
       try {
-        if (
-          !interaction.channel ||
-          interaction.channel.type !== ChannelType.GuildText
-        ) {
-          return;
-        }
+        if (!interaction.channel || interaction.channel.type !== ChannelType.GuildText) return;
 
         const task = getTask(interaction.channel.id);
         if (!task) {
@@ -1465,29 +1463,25 @@ Title: ${title}
         console.error('resume background error:', error);
       }
     });
-
     return;
   }
 
   if (interaction.commandName === 'finish') {
-    if (
-      !interaction.channel ||
-      interaction.channel.type !== ChannelType.GuildText
-    ) {
-      await interaction.reply({
-        content: '通常のタスクチャンネル内で使って。',
-        flags: 64,
-      });
+    if (!interaction.channel || interaction.channel.type !== ChannelType.GuildText) {
+      await interaction.reply({ content: '通常のタスクチャンネル内で使って。', flags: 64 });
       return;
     }
 
-    taskMemory.delete(interaction.channel.id);
-    void saveTaskMemory();
+    const task = getTask(interaction.channel.id);
+    if (task) {
+      touchTask(task, { status: 'completed', activeSpeaker: 'none' });
+      addDecision(task, { event: 'finish', note: 'Task finished by user command.' });
+    }
 
-    await interaction.reply({
-      content: 'タスク終了。',
-      flags: 64,
-    });
+    taskMemory.delete(interaction.channel.id);
+    scheduleTaskMemorySave({ immediate: true });
+
+    await interaction.reply({ content: 'タスク終了。', flags: 64 });
   }
 });
 
@@ -1498,54 +1492,52 @@ coordinator.on('messageCreate', async message => {
     if (message.content?.startsWith('/')) return;
 
     const decision = await shouldAutoRespond(message);
-
-    if (!decision.shouldRespond) {
-      return;
-    }
+    if (!decision.shouldRespond) return;
 
     const channelName = message.channel?.name || '';
 
     if (channelName.startsWith('task-')) {
       const task = getTask(message.channel.id);
-
       if (!task) {
-        const text = 'このチャンネルに保存済みタスクがありません。';
-        await sendAsBot(coordinator, message.channel.id, text, 'Coordinator');
+        await sendAsBot(coordinator, message.channel.id, 'このチャンネルに保存済みタスクがありません。', 'Coordinator');
         return;
       }
 
-      task.cycleCount = 0;
-      void saveTaskMemory();
+      const content = message.content.trim();
+      const prompt = content.replace(/^!(run|continue)\s+/i, '').trim();
+      if (!prompt) {
+        await sendAsBot(coordinator, message.channel.id, '指示文が空です。`!continue <指示>` 形式で送ってください。', 'Coordinator');
+        return;
+      }
 
-      appendHistory(
-        message.channel.id,
-        'User',
-        'execution',
-        `User normal message:\n${message.content.trim()}`
-      );
+      touchTask(task, { cycleCount: 0, status: 'idle' });
+      appendHistory(message.channel.id, 'User', 'execution', `User command message:\n${prompt}`);
 
-      const text = '通常メッセージを新しい指示として受け取りました。会議を再開します。';
-      await sendAsBot(coordinator, message.channel.id, text, 'Coordinator');
-      appendHistory(message.channel.id, 'Coordinator', 'control', text);
-
-      await runDynamicMeeting(
-        message.channel,
-        message.content.trim(),
-        'normal-message'
-      );
-
+      await sendAsBot(coordinator, message.channel.id, 'コマンド形式の通常メッセージを受理しました。会議を再開します。', 'Coordinator');
+      await enqueueMeetingRun(message.channel, prompt, 'normal-message');
       return;
     }
 
     if (decision.isNewTask) {
-      const ack = '依頼として受け取りました。専用チャンネルを作って進めます。';
-      await message.reply(ack);
-
+      await message.reply('依頼として受け取りました。専用チャンネルを作って進めます。');
       await autoCreateTaskFromMessage(message);
     }
   } catch (error) {
     console.error('messageCreate error:', error);
   }
+});
+
+// =========================================================
+// bootstrap
+// =========================================================
+
+const healthServer = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('ok');
+});
+
+healthServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`Health server listening on ${PORT}`);
 });
 
 (async () => {
