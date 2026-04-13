@@ -534,7 +534,7 @@ function isModelLimitError(error) {
 async function askOpenRouter(systemPrompt, userPrompt) {
   try {
     const response = await openrouter.chat.completions.create({
-      model: 'openai/gpt-4.1-mini',
+      model: 'openrouter/free',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
