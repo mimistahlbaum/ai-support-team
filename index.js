@@ -517,12 +517,17 @@ function isModelLimitError(error) {
   return (
     msg.includes('429') ||
     msg.includes('413') ||
+    msg.includes('503') ||
     msg.includes('quota') ||
     msg.includes('rate') ||
     msg.includes('credit') ||
     msg.includes('insufficient') ||
     msg.includes('too large') ||
-    msg.includes('timeout')
+    msg.includes('timeout') ||
+    msg.includes('unavailable') ||
+    msg.includes('high demand') ||
+    msg.includes('overloaded') ||
+    msg.includes('try again later')
   );
 }
 
