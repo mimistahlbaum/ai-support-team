@@ -98,14 +98,13 @@ const MAX_DYNAMIC_TURNS = 6;
 const TEXT_MODEL = 'llama-3.1-8b-instant';
 const JSON_MODEL = 'llama-3.1-8b-instant';
 
-const MEMORY_FILE = path.join(process.cwd(), 'task_memory.json');
-const PROFILE_FILE = path.join(process.cwd(), 'user_profile.json');
+const MIGRATION_FALLBACK_TASK_MEMORY_FILE = path.join(process.cwd(), 'task_memory.json');
+const MIGRATION_FALLBACK_PROFILE_FILE = path.join(process.cwd(), 'user_profile.json');
 
 const REQUEST_TIMEOUT_MS = 12000;
 const SEND_TIMEOUT_MS = 8000;
 const API_RETRIES = 2;
 const SEND_RETRIES = 2;
-const SAVE_DEBOUNCE_LOCAL_MS = 1500;
 const SAVE_DEBOUNCE_SUPABASE_MS = 5000;
 
 // =========================================================
@@ -116,9 +115,7 @@ let userProfile = {};
 const taskMemory = new Map();
 
 const saveState = {
-  localTimer: null,
   supabaseTimer: null,
-  pendingLocal: false,
   pendingSupabase: false,
 };
 
@@ -323,11 +320,6 @@ function serializeTaskMemory() {
   return Object.fromEntries(taskMemory);
 }
 
-function saveTaskMemoryLocalSync() {
-  const data = serializeTaskMemory();
-  fs.writeFileSync(MEMORY_FILE, JSON.stringify(data, null, 2), 'utf8');
-}
-
 async function saveTaskMemorySupabase() {
   const data = serializeTaskMemory();
   const { error } = await retryAsync(
@@ -348,40 +340,33 @@ async function saveTaskMemorySupabase() {
   }
 }
 
-async function flushTaskMemory({ local = true, supabase: remote = true } = {}) {
+async function flushTaskMemory({ local = false, supabase: remote = true } = {}) {
   try {
-    if (local) saveTaskMemoryLocalSync();
+    if (local) {
+      fs.writeFileSync(
+        MIGRATION_FALLBACK_TASK_MEMORY_FILE,
+        JSON.stringify(serializeTaskMemory(), null, 2),
+        'utf8'
+      );
+    }
     if (remote) await saveTaskMemorySupabase();
   } catch (error) {
     console.error('flushTaskMemory failed:', error.message || error);
   }
 }
 
-function scheduleTaskMemorySave({ local = true, supabase: remote = true, immediate = false } = {}) {
+function scheduleTaskMemorySave({ local = false, supabase: remote = true, immediate = false } = {}) {
   if (immediate) {
-    if (saveState.localTimer) clearTimeout(saveState.localTimer);
     if (saveState.supabaseTimer) clearTimeout(saveState.supabaseTimer);
-    saveState.localTimer = null;
     saveState.supabaseTimer = null;
-    saveState.pendingLocal = false;
     saveState.pendingSupabase = false;
     void flushTaskMemory({ local, supabase: remote });
     return;
   }
 
   if (local) {
-    saveState.pendingLocal = true;
-    if (saveState.localTimer) clearTimeout(saveState.localTimer);
-    saveState.localTimer = setTimeout(() => {
-      saveState.localTimer = null;
-      if (!saveState.pendingLocal) return;
-      saveState.pendingLocal = false;
-      try {
-        saveTaskMemoryLocalSync();
-      } catch (error) {
-        console.error('local task memory save failed:', error.message || error);
-      }
-    }, SAVE_DEBOUNCE_LOCAL_MS);
+    console.warn('local task memory save requested explicitly (migration/manual backup mode).');
+    void flushTaskMemory({ local: true, supabase: false });
   }
 
   if (remote) {
@@ -400,10 +385,13 @@ function scheduleTaskMemorySave({ local = true, supabase: remote = true, immedia
 
 async function loadTaskMemory() {
   try {
-    const { data, error } = await withTimeout(
-      () => supabase.from('bot_storage').select('value').eq('key', 'task_memory').maybeSingle(),
-      REQUEST_TIMEOUT_MS,
-      'supabase load task_memory'
+    const { data, error } = await retryAsync(
+      () => withTimeout(
+        () => supabase.from('bot_storage').select('value').eq('key', 'task_memory').maybeSingle(),
+        REQUEST_TIMEOUT_MS,
+        'supabase load task_memory'
+      ),
+      { retries: API_RETRIES, label: 'load task memory from supabase' }
     );
 
     if (!error && data?.value) {
@@ -415,8 +403,14 @@ async function loadTaskMemory() {
       return;
     }
 
-    if (!fs.existsSync(MEMORY_FILE)) return;
-    const raw = fs.readFileSync(MEMORY_FILE, 'utf8');
+    if (error) {
+      console.warn(`Supabase task_memory load failed; using migration fallback if available: ${error.message}`);
+    } else {
+      console.warn('Supabase task_memory not found; using migration fallback if available.');
+    }
+
+    if (!fs.existsSync(MIGRATION_FALLBACK_TASK_MEMORY_FILE)) return;
+    const raw = fs.readFileSync(MIGRATION_FALLBACK_TASK_MEMORY_FILE, 'utf8');
     if (!raw.trim()) return;
 
     const parsed = JSON.parse(raw);
@@ -424,7 +418,7 @@ async function loadTaskMemory() {
     for (const [key, value] of Object.entries(parsed)) {
       taskMemory.set(key, normalizeTask(value));
     }
-    console.log(`Loaded ${taskMemory.size} task memories locally.`);
+    console.log(`Loaded ${taskMemory.size} task memories from migration fallback JSON.`);
   } catch (error) {
     console.error('Failed to load task memory:', error);
   }
@@ -432,10 +426,13 @@ async function loadTaskMemory() {
 
 async function loadUserProfile() {
   try {
-    const { data, error } = await withTimeout(
-      () => supabase.from('bot_storage').select('value').eq('key', 'user_profile').maybeSingle(),
-      REQUEST_TIMEOUT_MS,
-      'supabase load user_profile'
+    const { data, error } = await retryAsync(
+      () => withTimeout(
+        () => supabase.from('bot_storage').select('value').eq('key', 'user_profile').maybeSingle(),
+        REQUEST_TIMEOUT_MS,
+        'supabase load user_profile'
+      ),
+      { retries: API_RETRIES, label: 'load user profile from supabase' }
     );
 
     if (!error && data?.value) {
@@ -444,14 +441,20 @@ async function loadUserProfile() {
       return;
     }
 
-    if (!fs.existsSync(PROFILE_FILE)) {
+    if (error) {
+      console.warn(`Supabase user_profile load failed; using migration fallback if available: ${error.message}`);
+    } else {
+      console.warn('Supabase user_profile not found; using migration fallback if available.');
+    }
+
+    if (!fs.existsSync(MIGRATION_FALLBACK_PROFILE_FILE)) {
       userProfile = {};
       return;
     }
 
-    const raw = fs.readFileSync(PROFILE_FILE, 'utf8');
+    const raw = fs.readFileSync(MIGRATION_FALLBACK_PROFILE_FILE, 'utf8');
     userProfile = raw.trim() ? JSON.parse(raw) : {};
-    console.log('Loaded user profile locally.');
+    console.log('Loaded user profile from migration fallback JSON.');
   } catch (error) {
     console.error('Failed to load user profile:', error);
     userProfile = {};
@@ -460,12 +463,13 @@ async function loadUserProfile() {
 
 async function saveUserProfile() {
   try {
-    fs.writeFileSync(PROFILE_FILE, JSON.stringify(userProfile, null, 2), 'utf8');
-
-    const { error } = await withTimeout(
-      () => supabase.from('bot_storage').upsert({ key: 'user_profile', value: userProfile, updated_at: nowIso() }),
-      REQUEST_TIMEOUT_MS,
-      'save user profile'
+    const { error } = await retryAsync(
+      () => withTimeout(
+        () => supabase.from('bot_storage').upsert({ key: 'user_profile', value: userProfile, updated_at: nowIso() }),
+        REQUEST_TIMEOUT_MS,
+        'save user profile'
+      ),
+      { retries: API_RETRIES, label: 'save user profile to supabase' }
     );
 
     if (error) {
@@ -1532,8 +1536,14 @@ coordinator.on('messageCreate', async message => {
 // =========================================================
 
 const healthServer = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('ok');
+  if (req.method === 'GET' && (req.url === '/' || req.url === '/health')) {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('ok');
+    return;
+  }
+
+  res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('not found');
 });
 
 healthServer.listen(PORT, '0.0.0.0', () => {
