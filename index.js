@@ -548,6 +548,23 @@ async function askOpenRouter(systemPrompt, userPrompt) {
   }
 }
 
+async function askGroq(systemPrompt, userPrompt) {
+  try {
+    const response = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    });
+
+    return response.choices?.[0]?.message?.content || '(no response)';
+  } catch (error) {
+    console.error('askGroq error:', error?.message || error);
+    return `Groq error: ${error?.message || 'unknown error'}`;
+  }
+}
+
 async function safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject) {
   try {
     const response = await groq.chat.completions.create({
@@ -563,19 +580,7 @@ async function safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject) {
     return JSON.parse(match ? match[0] : '{}');
   } catch (error) {
     if (isModelLimitError(error)) {
-      try {
-        const raw = await askOpenRouter(
-          systemPrompt,
-          `${userPrompt}\nReturn JSON only.`
-        );
-        const match = raw.match(/\{[\s\S]*\}/);
-        return JSON.parse(match ? match[0] : '{}');
-      } catch {
-        return fallbackObject;
-      }
-    }
-    return fallbackObject;
-  }
+  return fallbackObject;
 }
 
 async function updateHistorySummary(channelId) {
