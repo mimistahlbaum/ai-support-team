@@ -1503,11 +1503,12 @@ if (interaction.commandName === 'starttask') {
 
     await interaction.editReply(`専用チャンネルを作成しました: ${channel}`);
 
-    const startText = `新しいタスクを開始します。`;
-Type: ${taskType}
-Title: ${title}
+    const startText = `新しいタスクを開始します。
 
-ここからチームが自律的に会議して、必要なら実行まで進めます。`;
+    Type: ${taskType}
+    Title: ${title}
+
+    ここからチームが自律的に会議して、必要なら実行まで進めます。`;
 
     setTimeout(async () => {
       try {
