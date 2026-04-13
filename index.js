@@ -580,7 +580,11 @@ async function safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject) {
     return JSON.parse(match ? match[0] : '{}');
   } catch (error) {
     if (isModelLimitError(error)) {
-  return fallbackObject;
+      return fallbackObject;
+    }
+
+    return fallbackObject;
+  }
 }
 
 async function updateHistorySummary(channelId) {
