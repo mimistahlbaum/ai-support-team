@@ -8,6 +8,8 @@
 - 通常メッセージから新規 task channel を自動生成
 - `/starttask`, `/continue`, `/resume`, `/finish` を使った会議運用
 - `task_memory` / `user_profile` を Supabase (`bot_storage`) に永続化
+- `task_memory.json` / `user_profile.json` は初回移行時の fallback 読み込み専用
+- `task_memory.backup.json` / `user_profile.backup.json` は手動バックアップ用途
 - health server (`GET /`, `GET /health`) を `PORT` で待受
 
 ---
@@ -74,7 +76,9 @@ create table if not exists bot_storage (
 2. `.env` を設定（`SUPABASE_URL`, `SUPABASE_ANON_KEY` を含む）。
 3. `node migrate-local-to-supabase.js` を実行。
 4. Supabase の `bot_storage` に `task_memory`, `user_profile` が入ったことを確認。
-5. 以後、ローカル JSON は本番保存先として使わない（fallback / 手動バックアップ用途のみ）。
+5. 以後、通常運用の保存先は Supabase のみを使用。
+6. `task_memory.json` / `user_profile.json` は migration fallback 読み込み専用として保持。
+7. `*.backup.json` は manual backup 書き込み先として使用。
 
 ---
 
@@ -104,7 +108,7 @@ docker compose down
 docker compose restart
 ```
 
-`docker-compose.yml` はローカル JSON を永続 volume としてマウントしていません。通常永続化は Supabase のみを使用します。
+`docker-compose.yml` はローカル JSON を永続 volume としてマウントしていません。通常運用の永続化は Supabase のみを使用します（ローカル JSON は fallback / manual backup のみ）。
 
 ---
 
