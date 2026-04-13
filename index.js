@@ -122,6 +122,7 @@ const saveState = {
 };
 
 const channelRunState = new Map();
+let isShuttingDown = false;
 
 // =========================================================
 // utils
@@ -138,6 +139,10 @@ function sleep(ms) {
 function clip(text, max = 500) {
   if (!text) return '';
   return text.length > max ? `${text.slice(0, max)} ...` : text;
+}
+
+function formatError(error) {
+  return error?.stack || error?.message || String(error);
 }
 
 function splitLongText(text, maxLength = DISCORD_SAFE_LIMIT) {
@@ -342,18 +347,30 @@ async function saveTaskMemorySupabase() {
   }
 }
 
+function writeManualBackups() {
+  try {
+    fs.writeFileSync(
+      MANUAL_BACKUP_TASK_MEMORY_FILE,
+      JSON.stringify(serializeTaskMemory(), null, 2),
+      'utf8'
+    );
+    fs.writeFileSync(
+      MANUAL_BACKUP_PROFILE_FILE,
+      JSON.stringify(userProfile, null, 2),
+      'utf8'
+    );
+    console.log('Manual backup files updated.');
+  } catch (error) {
+    console.error('Failed to write manual backup files:', formatError(error));
+  }
+}
+
 async function flushTaskMemory({ local = false, supabase: remote = true } = {}) {
   try {
-    if (local) {
-      fs.writeFileSync(
-        MANUAL_BACKUP_TASK_MEMORY_FILE,
-        JSON.stringify(serializeTaskMemory(), null, 2),
-        'utf8'
-      );
-    }
+    if (local) writeManualBackups();
     if (remote) await saveTaskMemorySupabase();
   } catch (error) {
-    console.error('flushTaskMemory failed:', error.message || error);
+    console.error('flushTaskMemory failed:', formatError(error));
   }
 }
 
@@ -379,7 +396,7 @@ function scheduleTaskMemorySave({ local = false, supabase: remote = true, immedi
       if (!saveState.pendingSupabase) return;
       saveState.pendingSupabase = false;
       void saveTaskMemorySupabase().catch(error => {
-        console.error('supabase task memory save failed:', error.message || error);
+        console.error('supabase task memory save failed:', formatError(error));
       });
     }, SAVE_DEBOUNCE_SUPABASE_MS);
   }
@@ -422,7 +439,7 @@ async function loadTaskMemory() {
     }
     console.log(`Loaded ${taskMemory.size} task memories from migration fallback JSON.`);
   } catch (error) {
-    console.error('Failed to load task memory:', error);
+    console.error('Failed to load task memory:', formatError(error));
   }
 }
 
@@ -458,7 +475,7 @@ async function loadUserProfile() {
     userProfile = raw.trim() ? JSON.parse(raw) : {};
     console.log('Loaded user profile from migration fallback JSON.');
   } catch (error) {
-    console.error('Failed to load user profile:', error);
+    console.error('Failed to load user profile:', formatError(error));
     userProfile = {};
   }
 }
@@ -478,7 +495,7 @@ async function saveUserProfile() {
       console.error('Failed to save user profile to Supabase:', error.message);
     }
   } catch (error) {
-    console.error('Failed to save user profile:', error);
+    console.error('Failed to save user profile:', formatError(error));
   }
 }
 
@@ -1367,7 +1384,14 @@ async function registerCoordinatorCommands() {
     new SlashCommandBuilder().setName('finish').setDescription('Finish task').toJSON(),
   ];
 
-  await rest.put(Routes.applicationGuildCommands(COORDINATOR_CLIENT_ID, DISCORD_GUILD_ID), { body: commands });
+  await retryAsync(
+    () => withTimeout(
+      () => rest.put(Routes.applicationGuildCommands(COORDINATOR_CLIENT_ID, DISCORD_GUILD_ID), { body: commands }),
+      REQUEST_TIMEOUT_MS,
+      'register slash commands'
+    ),
+    { retries: API_RETRIES, label: 'register coordinator commands' }
+  );
   console.log('Coordinator slash commands registered.');
 }
 
@@ -1381,9 +1405,30 @@ coordinator.once('clientReady', async () => {
   try {
     await registerCoordinatorCommands();
   } catch (error) {
-    console.error('Slash command registration failed:', error);
+    console.error('Slash command registration failed:', formatError(error));
   }
 });
+
+function attachClientRuntimeHandlers(name, client) {
+  client.on('error', error => {
+    console.error(`[${name}] client error:`, formatError(error));
+  });
+  client.on('shardError', error => {
+    console.error(`[${name}] shard error:`, formatError(error));
+  });
+  client.on('shardDisconnect', (event, shardId) => {
+    console.warn(`[${name}] shard disconnected (id=${shardId}, code=${event?.code ?? 'n/a'})`);
+  });
+  client.on('shardResume', (shardId, replayedEvents) => {
+    console.log(`[${name}] shard resumed (id=${shardId}, replayed=${replayedEvents})`);
+  });
+}
+
+attachClientRuntimeHandlers('Scout', scout);
+attachClientRuntimeHandlers('Spark', spark);
+attachClientRuntimeHandlers('Forge', forge);
+attachClientRuntimeHandlers('Mirror', mirror);
+attachClientRuntimeHandlers('Coordinator', coordinator);
 
 coordinator.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
@@ -1552,20 +1597,62 @@ healthServer.listen(PORT, '0.0.0.0', () => {
   console.log(`Health server listening on ${PORT}`);
 });
 
+async function loginBot(client, token, name) {
+  await retryAsync(
+    () => withTimeout(() => client.login(token), REQUEST_TIMEOUT_MS, `${name} login`),
+    { retries: API_RETRIES, label: `${name} login` }
+  );
+}
+
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`[shutdown] ${signal} received. Flushing state...`);
+
+  if (saveState.supabaseTimer) {
+    clearTimeout(saveState.supabaseTimer);
+    saveState.supabaseTimer = null;
+  }
+
+  await flushTaskMemory({ local: true, supabase: true });
+  await saveUserProfile();
+
+  const clients = [scout, spark, forge, mirror, coordinator];
+  await Promise.allSettled(clients.map(client => client.destroy()));
+
+  await new Promise(resolve => {
+    healthServer.close(() => {
+      console.log('[shutdown] health server closed.');
+      resolve();
+    });
+  });
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => {
+  void gracefulShutdown('SIGTERM');
+});
+process.on('SIGINT', () => {
+  void gracefulShutdown('SIGINT');
+});
+
 (async () => {
   try {
+    console.log('[startup] Loading persisted state from Supabase (fallback JSON only if needed)...');
     await loadTaskMemory();
     await loadUserProfile();
 
+    console.log('[startup] Logging in Discord clients...');
     await Promise.all([
-      scout.login(SCOUT_BOT_TOKEN),
-      spark.login(SPARK_BOT_TOKEN),
-      forge.login(FORGE_BOT_TOKEN),
-      mirror.login(MIRROR_BOT_TOKEN),
-      coordinator.login(COORDINATOR_BOT_TOKEN),
+      loginBot(scout, SCOUT_BOT_TOKEN, 'Scout'),
+      loginBot(spark, SPARK_BOT_TOKEN, 'Spark'),
+      loginBot(forge, FORGE_BOT_TOKEN, 'Forge'),
+      loginBot(mirror, MIRROR_BOT_TOKEN, 'Mirror'),
+      loginBot(coordinator, COORDINATOR_BOT_TOKEN, 'Coordinator'),
     ]);
+    console.log('[startup] All Discord clients login initiated.');
   } catch (error) {
-    console.error(error);
+    console.error('[startup] fatal error:', formatError(error));
     process.exit(1);
   }
 })();

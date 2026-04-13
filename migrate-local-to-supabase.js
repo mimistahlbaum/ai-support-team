@@ -6,7 +6,7 @@ import { createClient } from '@supabase/supabase-js';
 const { SUPABASE_URL, SUPABASE_ANON_KEY } = process.env;
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-  console.error('Missing SUPABASE_URL or SUPABASE_ANON_KEY.');
+  console.error('[migrate] Missing SUPABASE_URL or SUPABASE_ANON_KEY.');
   process.exit(1);
 }
 
@@ -17,69 +17,70 @@ const MIGRATION_FILES = [
   { key: 'user_profile', file: path.join(process.cwd(), 'user_profile.json') },
 ];
 
-async function getExistingKey(key) {
-  const { data, error } = await supabase.from('bot_storage').select('key').eq('key', key).maybeSingle();
-  if (error) throw new Error(`failed to check existing key (${key}): ${error.message}`);
-  return Boolean(data?.key);
+function objectCount(value) {
+  if (Array.isArray(value)) return value.length;
+  if (value && typeof value === 'object') return Object.keys(value).length;
+  return 0;
+}
+
+async function getExistingKeys() {
+  const keys = MIGRATION_FILES.map(item => item.key);
+  const { data, error } = await supabase.from('bot_storage').select('key').in('key', keys);
+  if (error) throw new Error(`failed to check existing keys: ${error.message}`);
+  return new Set((data || []).map(row => row.key));
 }
 
 async function main() {
-  const existingFiles = [];
+  console.log('[migrate] Start local JSON -> Supabase migration.');
+  const payload = [];
 
   for (const item of MIGRATION_FILES) {
     if (!fs.existsSync(item.file)) {
-      console.warn(`Skip ${item.key}: file not found (${item.file})`);
+      console.log(`[migrate] ${item.key}: local file not found, skip (${item.file})`);
       continue;
     }
 
     const raw = fs.readFileSync(item.file, 'utf8');
     if (!raw.trim()) {
-      console.warn(`Skip ${item.key}: file is empty (${item.file})`);
+      console.log(`[migrate] ${item.key}: file is empty, skip (${item.file})`);
       continue;
     }
 
-    let value;
     try {
-      value = JSON.parse(raw);
+      const value = JSON.parse(raw);
+      payload.push({
+        key: item.key,
+        value,
+        updated_at: new Date().toISOString(),
+      });
+      console.log(`[migrate] ${item.key}: loaded (${objectCount(value)} top-level entries).`);
     } catch (error) {
-      console.error(`Skip ${item.key}: invalid JSON (${item.file}) -> ${error.message}`);
-      continue;
+      console.error(`[migrate] ${item.key}: invalid JSON, skip (${item.file}) -> ${error.message}`);
     }
-
-    existingFiles.push({ key: item.key, value });
   }
 
-  if (existingFiles.length === 0) {
-    console.log('No migration targets found. Nothing to upsert.');
+  if (payload.length === 0) {
+    console.log('[migrate] No migration targets found. Nothing to upsert.');
     return;
   }
 
-  for (const item of existingFiles) {
-    const exists = await getExistingKey(item.key);
-    if (exists) {
-      console.warn(`Warning: bot_storage already has key='${item.key}'. It will be overwritten by upsert.`);
+  const existingKeys = await getExistingKeys();
+  for (const item of payload) {
+    if (existingKeys.has(item.key)) {
+      console.warn(`[migrate] WARNING: key='${item.key}' already exists in bot_storage. It will be overwritten.`);
     }
   }
 
-  const payload = existingFiles.map(item => ({
-    key: item.key,
-    value: item.value,
-    updated_at: new Date().toISOString(),
-  }));
-
   const { error } = await supabase.from('bot_storage').upsert(payload);
   if (error) {
-    console.error(`Migration failed: ${error.message}`);
+    console.error(`[migrate] Migration failed: ${error.message}`);
     process.exit(1);
   }
 
-  console.log(`Migration completed. Upserted ${payload.length} key(s).`);
-  for (const item of payload) {
-    console.log(`- ${item.key}`);
-  }
+  console.log(`[migrate] Done. Upserted ${payload.length} key(s): ${payload.map(item => item.key).join(', ')}`);
 }
 
 main().catch(error => {
-  console.error('Migration error:', error.message || error);
+  console.error('[migrate] Unexpected error:', error?.message || error);
   process.exit(1);
 });
