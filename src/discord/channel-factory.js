@@ -4,7 +4,6 @@ import {
   SPARK_CLIENT_ID,
   FORGE_CLIENT_ID,
   MIRROR_CLIENT_ID,
-  COORDINATOR_CLIENT_ID,
   TASK_ADMIN_ROLE_ID,
 } from '../app/env.js';
 import { clip } from '../utils/text.js';
@@ -93,17 +92,24 @@ async function buildTaskChannelOverwrites(guild, creatorId) {
     },
   ];
 
+  const coordinatorRuntimeId = guild.members.me?.id || guild.client.user?.id || null;
+  if (!isLikelySnowflake(coordinatorRuntimeId)) {
+    throw new Error('[channel-factory] Coordinator runtime user id is unavailable; refusing to create task channel without coordinator access.');
+  }
+
+  overwrites.push({
+    id: coordinatorRuntimeId,
+    allow: BOT_CHANNEL_ALLOW,
+  });
+
   const botIds = [
-    { id: guild.members.me?.id, label: 'guild.members.me' },
-    { id: guild.client.user?.id, label: 'runtime bot user' },
     { id: SCOUT_CLIENT_ID, label: 'SCOUT_CLIENT_ID' },
     { id: SPARK_CLIENT_ID, label: 'SPARK_CLIENT_ID' },
     { id: FORGE_CLIENT_ID, label: 'FORGE_CLIENT_ID' },
     { id: MIRROR_CLIENT_ID, label: 'MIRROR_CLIENT_ID' },
-    { id: COORDINATOR_CLIENT_ID, label: 'COORDINATOR_CLIENT_ID' },
   ];
 
-  const addedMemberIds = new Set();
+  const addedMemberIds = new Set([coordinatorRuntimeId]);
   for (const bot of botIds) {
     if (!bot.id || addedMemberIds.has(bot.id)) continue;
     const memberId = await resolveMemberOverwriteId(guild, bot.id, bot.label);
@@ -123,6 +129,12 @@ async function buildTaskChannelOverwrites(guild, creatorId) {
       allow: BOT_CHANNEL_ALLOW,
     });
   }
+
+  const overwriteIds = overwrites.map(overwrite => overwrite.id);
+  const coordinatorIncluded = overwriteIds.includes(coordinatorRuntimeId);
+  console.info(
+    `[channel-factory] Final task-channel overwrites: ids=${overwriteIds.join(',')} coordinatorIncluded=${coordinatorIncluded}`
+  );
 
   return overwrites;
 }
