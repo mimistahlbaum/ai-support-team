@@ -11,7 +11,8 @@ const MIGRATION_FALLBACK_PROFILE_FILE = path.join(process.cwd(), 'user_profile.j
 const MANUAL_BACKUP_TASK_MEMORY_FILE = path.join(process.cwd(), 'task_memory.backup.json');
 const MANUAL_BACKUP_PROFILE_FILE = path.join(process.cwd(), 'user_profile.backup.json');
 
-const REQUEST_TIMEOUT_MS = 12000;
+const REQUEST_TIMEOUT_MS = 25000;
+const SAFE_JSON_REQUEST_TIMEOUT_MS = 30000;
 const SEND_TIMEOUT_MS = 8000;
 const API_RETRIES = 2;
 const SEND_RETRIES = 2;
@@ -28,6 +29,7 @@ export {
   MANUAL_BACKUP_TASK_MEMORY_FILE,
   MANUAL_BACKUP_PROFILE_FILE,
   REQUEST_TIMEOUT_MS,
+  SAFE_JSON_REQUEST_TIMEOUT_MS,
   SEND_TIMEOUT_MS,
   API_RETRIES,
   SEND_RETRIES,
