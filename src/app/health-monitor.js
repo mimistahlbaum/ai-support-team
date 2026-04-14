@@ -1,9 +1,15 @@
-import { WebSocketStatus } from 'discord.js';
+import pkg from 'discord.js';
 import {
   ALERT_COOLDOWN_MS,
   HEALTHCHECK_INTERVAL_MS,
   HEALTHCHECK_MAX_STALE_MS,
 } from './constants.js';
+
+const { WebSocketStatus } = pkg;
+const WS_READY =
+  WebSocketStatus?.Ready ??
+  WebSocketStatus?.READY ??
+  0;
 
 const STATUS_LABELS = Object.fromEntries(
   Object.entries(WebSocketStatus)
@@ -93,7 +99,7 @@ export function createHealthMonitor({ clients, serviceName = 'ai-chat-support-gr
       const wsStatus = getWsStatusLabel(wsStatusCode);
       const loggedIn = Boolean(client.user);
       const ready = client.isReady();
-      const wsUsable = wsStatusCode === WebSocketStatus.Ready;
+      const wsUsable = wsStatusCode === WS_READY;
       return { name, loggedIn, ready, wsStatus, wsStatusCode, wsUsable };
     });
 
