@@ -17,6 +17,9 @@ async function sendAsBot(botClient, channelId, text, label = '') {
   );
 
   const chunks = splitLongText(text);
+  console.log(
+    `[discord-send] speaker=${label || 'unknown'} sender=${botClient.user?.tag || 'unknown'} channel=${channelId} chunks=${chunks.length}`
+  );
   for (let i = 0; i < chunks.length; i++) {
     const prefix = i === 0 || !label ? '' : `[${label} cont. ${i + 1}]\n`;
     await retryAsync(

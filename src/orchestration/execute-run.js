@@ -10,7 +10,7 @@ import { updateHistorySummary, isProviderFailureTextFromOutput } from './update-
 import { getTask, touchTask } from '../domain/task-model.js';
 import { scheduleTaskMemorySave } from '../services/storage/task-repository.js';
 
-export function createExecuteMeetingRun({ coordinator, roleClient }) {
+export function createExecuteMeetingRun({ coordinator }) {
   return async function executeMeetingRun(channel, latestUserPrompt, invocationMode) {
     const task = getTask(channel.id);
 
@@ -81,7 +81,7 @@ export function createExecuteMeetingRun({ coordinator, roleClient }) {
         touchTask(task, { activeSpeaker: speaker });
         const output = await askAgentResponse(speaker, instruction, task, mode);
 
-        await sendAsBot(roleClient(speaker), channel.id, output, speaker);
+        await sendAsBot(coordinator, channel.id, output, speaker);
         appendHistory(channel.id, speaker, mode, output);
 
         if (isProviderFailureTextFromOutput(output)) {
