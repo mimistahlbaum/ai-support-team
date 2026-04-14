@@ -1,8 +1,8 @@
 # AI Support Team
 
-AI Support Team is an open, reusable multi-agent support system for independent artists and small creative teams.
+AI Support Team is a reusable multi-agent support system for independent artists and small creative teams.
 
-It helps turn everyday Discord messages into structured support workflows for admin, research, planning, drafting, coordination, and creative operations.
+It uses a Discord-first workflow to turn everyday messages into structured support for admin, research, planning, drafting, coordination, and creative operations.
 
 ## Who this is for
 
