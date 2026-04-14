@@ -1,7 +1,7 @@
 services:
-  ai-chat-support-group:
+  ai-support-team:
     build: .
-    container_name: ai-chat-support-group
+    container_name: ai-support-team
     restart: unless-stopped
     env_file:
       - .env

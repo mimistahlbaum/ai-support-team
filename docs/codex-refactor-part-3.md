@@ -1,6 +1,6 @@
 # Codex refactor brief part 3
 
-Repository: `mimistahlbaum/ai-chat-support-group`
+Repository: `mimistahlbaum/ai-support-team`
 Base branch: `main`
 
 ## Goal
