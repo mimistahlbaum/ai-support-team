@@ -1,4 +1,4 @@
-import { JSON_MODEL, REQUEST_TIMEOUT_MS, API_RETRIES } from '../../app/constants.js';
+import { JSON_MODEL, SAFE_JSON_REQUEST_TIMEOUT_MS, API_RETRIES } from '../../app/constants.js';
 import { retryAsync } from '../../utils/retry.js';
 import { withTimeout } from '../../utils/timeout.js';
 import { groq } from './groq-client.js';
@@ -16,7 +16,7 @@ async function safeJsonFromGroq(systemPrompt, userPrompt, fallbackObject) {
             { role: 'user', content: userPrompt },
           ],
         }),
-        REQUEST_TIMEOUT_MS,
+        SAFE_JSON_REQUEST_TIMEOUT_MS,
         'groq json completion'
       ),
       { retries: API_RETRIES, label: 'safeJsonFromGroq' }
