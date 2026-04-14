@@ -68,7 +68,7 @@ export function createDiscordAlertSender({ serviceName }) {
   return { sendAlert, environment };
 }
 
-export function createHealthMonitor({ clients, serviceName = 'ai-chat-support-group' }) {
+export function createHealthMonitor({ clients, serviceName = 'ai-support-team' }) {
   const maxStaleMs = parsePositiveNumber(process.env.HEALTHCHECK_MAX_STALE_MS, HEALTHCHECK_MAX_STALE_MS);
   const intervalMs = parsePositiveNumber(process.env.HEALTHCHECK_INTERVAL_MS, HEALTHCHECK_INTERVAL_MS);
   const cooldownMs = parsePositiveNumber(process.env.ALERT_COOLDOWN_MS, ALERT_COOLDOWN_MS);

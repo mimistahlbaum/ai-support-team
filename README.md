@@ -1,60 +1,90 @@
-# AI Chat Support Group Bot
+# AI Support Team
 
-5 bot 構成（Scout / Spark / Forge / Mirror / Coordinator）で Discord 内の相談を自律会議に変換し、タスク実行まで進める bot です。通常運用時の永続化先は **Supabase (`bot_storage`) のみ** です。
+AI Support Team is an open, reusable multi-agent support system for independent artists and small creative teams.
 
-- task channel 自動生成（通常メッセージ起点）
-- `/starttask`, `/continue`, `/resume`, `/finish`
-- 永続化キー: `task_memory`, `user_profile`
-- `GET /`, `GET /health`, `GET /ready` の health endpoint を `PORT` で公開
+It helps turn everyday Discord messages into structured support workflows for admin, research, planning, drafting, coordination, and creative operations.
 
----
+## Who this is for
 
-## Render での運用（最優先）
+- dancers
+- choreographers
+- musicians
+- theatre makers
+- visual artists
+- producers
+- interdisciplinary artists
+- small collectives
+- small arts organisations
 
-### Render Web Service 設定
+## What it helps with
 
-- **Repository**: `mimistahlbaum/ai-chat-support-group`
-- **Branch**: `main`
-- **Root Directory**: リポジトリルート（空欄）
-- **Build Command**: `npm install --omit=dev`
-- **Start Command**: `npm run render-start`（`npm start` でも可）
-- **Health Check Path**: `/health`
+- turning ideas or requests into actionable task channels
+- coordinating role-based AI support across multiple specialist agents
+- drafting outlines, summaries, and next-step plans
+- maintaining shared task memory and user profile context
+- tracking service health for long-running operations
 
-### 必須 Environment Variables
+## Architecture (current, lightweight)
 
-`.env.example` の必須項目を Render の Environment に設定してください。
+This repo keeps the existing architecture and agent roles:
 
-- `DISCORD_GUILD_ID`
-- `SCOUT_BOT_TOKEN`, `SCOUT_CLIENT_ID`
-- `SPARK_BOT_TOKEN`, `SPARK_CLIENT_ID`
-- `FORGE_BOT_TOKEN`, `FORGE_CLIENT_ID`
-- `MIRROR_BOT_TOKEN`, `MIRROR_CLIENT_ID`
-- `COORDINATOR_BOT_TOKEN`, `COORDINATOR_CLIENT_ID`
-- `GROQ_API_KEY`
-- `TAVILY_API_KEY`
-- `NOTION_KEY`
-- `SUPABASE_URL`
-- `SUPABASE_ANON_KEY`
+- **Scout**: gathers and checks context
+- **Spark**: proposes ideas and directions
+- **Forge**: develops practical output
+- **Mirror**: critiques and reflects
+- **Coordinator**: routes, decides next step, and posts final summary
 
-任意:
-- `TASK_ADMIN_ROLE_ID`（task channel 追加アクセス制御）
-- `PORT`（Render では通常自動設定。ローカル既定値は `10000`）
-- `DISCORD_ALERT_WEBHOOK_URL`（異常/復旧通知を送る Discord webhook）
-- `HEALTHCHECK_MAX_STALE_MS`（既定: `180000`）
-- `HEALTHCHECK_INTERVAL_MS`（既定: `60000`）
-- `ALERT_COOLDOWN_MS`（既定: `300000`）
+Core flow:
 
-### Render の sleep / restart 後の挙動
+1. Discord message or slash command starts/resumes a task.
+2. Coordinator orchestrates multi-agent turns.
+3. Task state/history are persisted in Supabase (`bot_storage`).
+4. Health server exposes `GET /`, `GET /health`, `GET /ready`.
 
-- アプリ起動時に Supabase から `task_memory` / `user_profile` を再読込します。
-- Supabase 読込に失敗した場合のみ migration fallback (`task_memory.json`, `user_profile.json`) を試します。
-- Discord 接続断が起きても shard イベントをログ出しし、再接続の状態を追えるようにしています。
+## Required services / accounts
 
----
+You need:
 
-## Supabase
+- a Discord server (guild) you can manage
+- 5 Discord bot applications (Scout, Spark, Forge, Mirror, Coordinator)
+- Groq API key
+- Tavily API key
+- Notion API key
+- Supabase project (table: `bot_storage`)
 
-### 1) `bot_storage` テーブル作成 SQL
+Optional:
+
+- Discord webhook URL for health/crash alerts
+- Render (or any Node.js host) for deployment
+- Docker-compatible host for container deployment
+
+## Environment variables
+
+Copy `.env.example` to `.env` and fill required values.
+
+Required groups:
+
+- Discord IDs/tokens for all 5 agents
+- External API keys: `GROQ_API_KEY`, `TAVILY_API_KEY`, `NOTION_KEY`
+- Storage: `SUPABASE_URL`, `SUPABASE_ANON_KEY`
+
+Optional groups:
+
+- `TASK_ADMIN_ROLE_ID`
+- `PORT`
+- health alert/monitor tuning vars
+
+See `.env.example` for full details and defaults.
+
+## Local setup
+
+```bash
+npm install
+cp .env.example .env
+npm start
+```
+
+### Supabase table setup
 
 ```sql
 create table if not exists bot_storage (
@@ -64,36 +94,25 @@ create table if not exists bot_storage (
 );
 ```
 
-### 2) ローカル JSON から migration
+### Optional migration from local JSON files
 
 ```bash
 npm run migrate:supabase
 ```
 
-- `task_memory.json` / `user_profile.json` が存在する場合のみ読み込みます。
-- Supabase 側に既存キーがある場合は上書き警告を表示します。
+This reads `task_memory.json` / `user_profile.json` only if they exist.
 
-### 3) JSON ファイルの役割（通常運用では非メイン）
+## Deployment options
 
-- `task_memory.json` / `user_profile.json`: **migration fallback 読み込み専用**
-- `task_memory.backup.json` / `user_profile.backup.json`: **manual backup 書き込み先**
-- 通常の保存先は Supabase のみ
+### Option A: Render
 
----
+Use `render.yaml` as a baseline, or configure manually:
 
-## ローカル開発
+- Build command: `npm install --omit=dev`
+- Start command: `npm run render-start` (or `npm start`)
+- Health check path: `/health`
 
-```bash
-npm install
-cp .env.example .env
-npm start
-```
-
----
-
-## Docker / TNAS（参考情報）
-
-本リポジトリには `Dockerfile` / `docker-compose.yml` を残していますが、**現行の第一運用は Render** です。Docker/TNAS は参考・将来用の位置づけです。
+### Option B: Docker / docker-compose
 
 ```bash
 docker compose up -d --build
@@ -101,47 +120,37 @@ docker compose logs -f
 docker compose down
 ```
 
----
+### Option C: Any Node.js host
 
-## Troubleshooting
+Any host that supports long-running Node processes and environment variables can run this project.
 
-## Health monitoring / Discord alerts
+## Customising for another artist or team
 
-- `/health` は Discord 接続状態まで含めて判定します。以下を JSON で返します:
-  - `ok`, `uptime`, `timestamp`, `discordLoggedIn`, `discordWsStatus`, `lastHeartbeatAt`, `version`
-- `ok=false` になる条件:
-  - いずれかの bot client が未ログイン/未 ready
-  - WebSocket 状態が `Ready` ではない
-  - 健全な heartbeat（内部健康 tick）が `HEALTHCHECK_MAX_STALE_MS` を超えて途切れた
-- 監視ループ（既定 60 秒間隔）は、異常が継続した時だけ webhook 通知します。
-  - 同一状態の連投を避けるため `ALERT_COOLDOWN_MS` を適用
-  - 異常から復旧したときは recovery 通知を 1 回送信
-  - `uncaughtException` / `unhandledRejection` / `SIGTERM` / `SIGINT` でも可能な限り通知
-- Render は Web Service のまま運用し、Health Check Path を `/health` に設定してください（`render.yaml` も同設定）。
+You can adapt this template without changing core architecture:
 
-### Missing required env vars
+- edit prompt files under `src/agents/**/prompts.js`
+- adjust slash command workflows in `src/discord/**`
+- tune orchestration rules in `src/orchestration/**`
+- set role access rules with `TASK_ADMIN_ROLE_ID`
+- update deployment metadata (`render.yaml`, compose service name) to your own project name
 
-起動時に `Missing required env vars.` が出る場合、必須 env の未設定です。Render 環境変数または `.env` を再確認してください。
+## Privacy and security notes
 
-### Supabase 接続失敗
+- Never commit `.env` or real API keys/tokens.
+- Keep Discord bot permissions minimal for your use case.
+- Restrict Supabase policies appropriately if using RLS.
+- Health alerts can include operational metadata (service state, uptime); send only to trusted channels.
 
-- `SUPABASE_URL`, `SUPABASE_ANON_KEY` を確認
-- `bot_storage` テーブル作成済みか確認
-- RLS 利用時は `select` / `upsert` を許可する policy を確認
+## Current limitations
 
-### Discord login 失敗
+- Requires 5 bot tokens/client IDs (setup effort is non-trivial).
+- No built-in web UI; operations are Discord-first.
+- Supabase schema is intentionally minimal (`bot_storage` key/value model).
+- If required env vars are missing, startup exits immediately.
 
-- Bot token / client id の組み合わせミス
-- Bot 招待・権限・Intent（特に Message Content）不足
-- 起動ログの `fatal error` / bot 名付き login エラーを確認
+## Troubleshooting quick notes
 
-### slash commands registration failure
-
-- `COORDINATOR_CLIENT_ID` / `DISCORD_GUILD_ID` の不一致
-- Discord API 一時エラー（起動中に retry 実施）
-- 失敗時も bot 本体は継続起動（ログで確認可能）
-
-### Render sleep / restart 後に反応が不安定
-
-- Render の再起動直後は Discord 再接続完了まで数秒〜数十秒かかる場合があります。
-- `/health` が `ok` でも、Discord 側 ready ログが出るまで待ってください。
+- `Missing required env vars.` → check `.env` against `.env.example`.
+- Supabase connection errors → verify URL/key/table/policies.
+- Discord login issues → verify token/client ID pairing, bot invite permissions, intents.
+- Slash command registration issues → verify `COORDINATOR_CLIENT_ID` and `DISCORD_GUILD_ID`.
