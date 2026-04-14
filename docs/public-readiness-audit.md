@@ -10,8 +10,8 @@
 
 ## 2) What should be renamed or generalised
 
-- Product naming from legacy `AI Chat Support Group Bot` to `AI Support Team`.
-- Legacy repo identifier `ai-chat-support-group` to neutral `ai-support-team` in service labels and docs.
+- Product naming from old internal project name to `AI Support Team`.
+- Legacy internal identifier to neutral `ai-support-team` in service labels and docs.
 - Package metadata name to public-friendly neutral naming.
 
 ## 3) What should move to config or documentation
@@ -21,10 +21,10 @@
 
 ## 4) What still reads as private or project-specific (before cleanup)
 
-- README positioning was platform-specific and tied to a prior repo identity.
-- Internal docs referenced prior repository name.
-- Health monitor default service label used old identity string.
-- Compose/render service naming used old project identity.
+- README positioning was platform-specific and tied to a previous private repo.
+- Internal docs referenced the previous private repo.
+- Health monitor default service label used a legacy internal identifier.
+- Compose/render service naming used the old internal project name.
 - Legacy backup file `index_backup.js` remained in repo and was not appropriate for public template use.
 
 ## 5) What should be improved before public sharing
