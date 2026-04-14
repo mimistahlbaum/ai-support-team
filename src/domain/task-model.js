@@ -46,11 +46,10 @@ export function upsertNormalizedTask(channelId, partialTask, fallback = {}) {
 }
 
 export function touchTask(task, updates = {}) {
-  const canonical =
-    typeof task === 'string'
-      ? taskMemory.get(task)
-      : taskMemory.get(task?.channelId) || task;
+  const channelId = typeof task === 'string' ? task : task?.channelId;
+  if (!channelId) return;
 
+  const canonical = taskMemory.get(channelId);
   if (!canonical) return;
 
   Object.assign(canonical, updates);
