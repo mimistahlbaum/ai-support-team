@@ -35,8 +35,16 @@ const BOT_CHANNEL_ALLOW = [
   PermissionFlagsBits.ReadMessageHistory,
 ];
 
+function isLikelySnowflake(id) {
+  return typeof id === 'string' && /^\d{17,20}$/.test(id);
+}
+
 async function resolveMemberOverwriteId(guild, memberId, label) {
   if (!memberId) return null;
+  if (!isLikelySnowflake(memberId)) {
+    console.warn(`[channel-factory] Skipping ${label} overwrite: invalid member id format (${memberId})`);
+    return null;
+  }
 
   const cachedMember = guild.members.resolve(memberId);
   if (cachedMember) return cachedMember.id;
@@ -52,6 +60,10 @@ async function resolveMemberOverwriteId(guild, memberId, label) {
 
 async function resolveRoleOverwriteId(guild, roleId, label) {
   if (!roleId) return null;
+  if (!isLikelySnowflake(roleId)) {
+    console.warn(`[channel-factory] Skipping ${label} overwrite: invalid role id format (${roleId})`);
+    return null;
+  }
 
   const cachedRole = guild.roles.resolve(roleId);
   if (cachedRole) return cachedRole.id;
@@ -82,6 +94,7 @@ async function buildTaskChannelOverwrites(guild, creatorId) {
   ];
 
   const botIds = [
+    { id: guild.members.me?.id, label: 'guild.members.me' },
     { id: guild.client.user?.id, label: 'runtime bot user' },
     { id: SCOUT_CLIENT_ID, label: 'SCOUT_CLIENT_ID' },
     { id: SPARK_CLIENT_ID, label: 'SPARK_CLIENT_ID' },
