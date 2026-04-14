@@ -10,7 +10,6 @@ import {
   forge,
   mirror,
   coordinator,
-  roleClient,
   attachReadyHandlers,
 } from './discord/coordinator-client.js';
 import { createExecuteMeetingRun } from './orchestration/execute-run.js';
@@ -25,7 +24,7 @@ import { bootstrapDiscordClients, registerGracefulShutdown } from './app/bootstr
 setTaskModelHooks({ scheduleTaskMemorySave });
 setHistoryModelHooks({ scheduleTaskMemorySave });
 
-const executeMeetingRun = createExecuteMeetingRun({ coordinator, roleClient });
+const executeMeetingRun = createExecuteMeetingRun({ coordinator });
 const enqueueMeetingRun = createEnqueueMeetingRun({ coordinator, executeMeetingRun });
 const runResume = createRunResume({ coordinator, enqueueMeetingRun });
 const autoCreateTaskFromMessage = createAutoCreateTaskFromMessage({ coordinator, enqueueMeetingRun });
