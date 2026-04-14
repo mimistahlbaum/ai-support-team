@@ -1,11 +1,16 @@
 import http from 'http';
 import { PORT } from './constants.js';
 
-export function createAndStartHealthServer() {
+export function createAndStartHealthServer({ getHealthSnapshot }) {
   const healthServer = http.createServer((req, res) => {
-    if (req.method === 'GET' && (req.url === '/' || req.url === '/health')) {
-      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('ok');
+    const isHealthRequest = req.method === 'GET' && (req.url === '/health' || req.url === '/ready');
+    const isRootRequest = req.method === 'GET' && req.url === '/';
+
+    if (isHealthRequest || isRootRequest) {
+      const health = getHealthSnapshot();
+      const statusCode = req.url === '/health' ? (health.ok ? 200 : 503) : 200;
+      res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(health));
       return;
     }
 

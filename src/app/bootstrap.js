@@ -20,11 +20,17 @@ export async function loginBot(client, token, name) {
   );
 }
 
-export function registerGracefulShutdown({ clients, healthServer }) {
+export function registerGracefulShutdown({ clients, healthServer, healthMonitor }) {
   async function gracefulShutdown(signal) {
     if (getIsShuttingDown()) return;
     setIsShuttingDown(true);
     console.log(`[shutdown] ${signal} received. Flushing state...`);
+    await healthMonitor.sendAlert({
+      level: 'INFO',
+      reason: `Process shutting down (${signal})`,
+      details: `ws=${healthMonitor.getLastEvaluation().discordWsStatus}`,
+    });
+    healthMonitor.stop();
 
     if (saveState.supabaseTimer) {
       clearTimeout(saveState.supabaseTimer);
@@ -50,6 +56,27 @@ export function registerGracefulShutdown({ clients, healthServer }) {
   });
   process.on('SIGINT', () => {
     void gracefulShutdown('SIGINT');
+  });
+}
+
+export function registerCrashHandlers({ healthMonitor }) {
+  async function handleFatalError(type, error) {
+    const formattedError = formatError(error);
+    console.error(`[fatal] ${type}:`, formattedError);
+    await healthMonitor.sendAlert({
+      level: 'CRITICAL',
+      reason: `${type}: ${formattedError}`,
+      details: `ws=${healthMonitor.getLastEvaluation().discordWsStatus}`,
+    });
+    process.exit(1);
+  }
+
+  process.on('uncaughtException', error => {
+    void handleFatalError('uncaughtException', error);
+  });
+
+  process.on('unhandledRejection', reason => {
+    void handleFatalError('unhandledRejection', reason);
   });
 }
 
