@@ -5,7 +5,7 @@
 - task channel 自動生成（通常メッセージ起点）
 - `/starttask`, `/continue`, `/resume`, `/finish`
 - 永続化キー: `task_memory`, `user_profile`
-- `GET /` と `GET /health` の health endpoint を `PORT` で公開
+- `GET /`, `GET /health`, `GET /ready` の health endpoint を `PORT` で公開
 
 ---
 
@@ -39,6 +39,10 @@
 任意:
 - `TASK_ADMIN_ROLE_ID`（task channel 追加アクセス制御）
 - `PORT`（Render では通常自動設定。ローカル既定値は `10000`）
+- `DISCORD_ALERT_WEBHOOK_URL`（異常/復旧通知を送る Discord webhook）
+- `HEALTHCHECK_MAX_STALE_MS`（既定: `180000`）
+- `HEALTHCHECK_INTERVAL_MS`（既定: `60000`）
+- `ALERT_COOLDOWN_MS`（既定: `300000`）
 
 ### Render の sleep / restart 後の挙動
 
@@ -100,6 +104,20 @@ docker compose down
 ---
 
 ## Troubleshooting
+
+## Health monitoring / Discord alerts
+
+- `/health` は Discord 接続状態まで含めて判定します。以下を JSON で返します:
+  - `ok`, `uptime`, `timestamp`, `discordLoggedIn`, `discordWsStatus`, `lastHeartbeatAt`, `version`
+- `ok=false` になる条件:
+  - いずれかの bot client が未ログイン/未 ready
+  - WebSocket 状態が `Ready` ではない
+  - 健全な heartbeat（内部健康 tick）が `HEALTHCHECK_MAX_STALE_MS` を超えて途切れた
+- 監視ループ（既定 60 秒間隔）は、異常が継続した時だけ webhook 通知します。
+  - 同一状態の連投を避けるため `ALERT_COOLDOWN_MS` を適用
+  - 異常から復旧したときは recovery 通知を 1 回送信
+  - `uncaughtException` / `unhandledRejection` / `SIGTERM` / `SIGINT` でも可能な限り通知
+- Render は Web Service のまま運用し、Health Check Path を `/health` に設定してください（`render.yaml` も同設定）。
 
 ### Missing required env vars
 
