@@ -39,11 +39,7 @@ export async function shouldAutoRespond(message) {
   const channelName = message.channel?.name || '';
 
   if (channelName.startsWith('task-')) {
-    const commandLike =
-      content === '!run' ||
-      content === '!continue' ||
-      content.startsWith('!run ') ||
-      content.startsWith('!continue ');
+    const commandLike = /^!(run|continue)(?:\s+|$)/i.test(content);
     return {
       shouldRespond: commandLike,
       reason: commandLike ? 'task command message' : 'task channel requires !run/!continue',
