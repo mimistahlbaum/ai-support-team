@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: ai-support-team
+    name: ai-chat-support-group
     runtime: node
     plan: free
     rootDir: .

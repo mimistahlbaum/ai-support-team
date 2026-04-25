@@ -1,6 +1,8 @@
 .env
 node_modules
 google_token.json
+google-tokens.json
+token.json
 task_memory.json
 credentials.json
 user_profile.json
