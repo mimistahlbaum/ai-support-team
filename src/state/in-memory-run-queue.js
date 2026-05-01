@@ -6,3 +6,9 @@ export function getRunState(channelId) {
   }
   return channelRunState.get(channelId);
 }
+
+export function clearRunQueue(channelId) {
+  if (channelRunState.has(channelId)) {
+    channelRunState.get(channelId).queue = [];
+  }
+}
