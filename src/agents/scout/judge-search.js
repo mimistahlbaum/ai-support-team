@@ -1,5 +1,5 @@
 import { safeJsonFromGroq } from '../../services/llm/safe-json.js';
-import { buildUserProfileContext } from '../../orchestration/context-builders.js';
+import { asUntrustedContent, buildUserProfileContext } from '../../orchestration/context-builders.js';
 
 export async function askScoutSearchDecision(taskType, prompt, existingEvidence = '') {
   const parsed = await safeJsonFromGroq(
@@ -27,7 +27,7 @@ export async function askScoutSearchDecision(taskType, prompt, existingEvidence 
   "confidence": "high"
 }
 `,
-    `taskType:\n${taskType}\nprompt:\n${prompt}\nexistingEvidence:\n${existingEvidence || 'none'}\nuserProfile:\n${buildUserProfileContext()}`,
+    `taskType:\n${taskType}\nprompt:\n${asUntrustedContent('task_prompt', prompt)}\nexistingEvidence:\n${asUntrustedContent('existing_evidence', existingEvidence || 'none')}\nuserProfile:\n${asUntrustedContent('user_profile', buildUserProfileContext())}`,
     {
       needSearch: false,
       needFreshSearch: false,
