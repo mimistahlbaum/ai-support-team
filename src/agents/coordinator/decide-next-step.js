@@ -1,6 +1,6 @@
 import { safeJsonFromGroq } from '../../services/llm/safe-json.js';
 import { taskTypeHint } from '../../domain/decision-model.js';
-import { buildHistoryContext, buildUserProfileContext } from '../../orchestration/context-builders.js';
+import { asUntrustedContent, buildHistoryContext, buildUserProfileContext } from '../../orchestration/context-builders.js';
 
 export async function askCoordinatorNextStep(task, latestUserPrompt, turnCount) {
   const parsed = await safeJsonFromGroq(
@@ -35,7 +35,7 @@ export async function askCoordinatorNextStep(task, latestUserPrompt, turnCount) 
   "nextInstruction": "specific instruction"
 }
 `,
-    `taskType:\n${task.taskType}\ntaskHint:\n${taskTypeHint(task.taskType)}\nuserProfile:\n${buildUserProfileContext()}\noriginalPrompt:\n${task.prompt}\nlatestUserPrompt:\n${latestUserPrompt}\nhistorySummary:\n${task.historySummary || 'No summary.'}\nrecentHistory:\n${buildHistoryContext(task.channelId, 10)}\nscoutEvidence:\n${task.scoutEvidence || '検索なし'}\nturnCount:\n${turnCount}`,
+    `taskType:\n${task.taskType}\ntaskHint:\n${taskTypeHint(task.taskType)}\nuserProfile:\n${asUntrustedContent('user_profile', buildUserProfileContext())}\noriginalPrompt:\n${asUntrustedContent('original_prompt', task.prompt)}\nlatestUserPrompt:\n${asUntrustedContent('latest_user_prompt', latestUserPrompt)}\nhistorySummary:\n${asUntrustedContent('history_summary', task.historySummary || 'No summary.')}\nrecentHistory:\n${asUntrustedContent('recent_history', buildHistoryContext(task.channelId, 10))}\nscoutEvidence:\n${asUntrustedContent('scout_evidence', task.scoutEvidence || '検索なし')}\nturnCount:\n${turnCount}`,
     {
       nextSpeaker: 'none',
       taskComplete: true,
