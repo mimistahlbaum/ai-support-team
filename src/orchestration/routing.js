@@ -1,5 +1,5 @@
 import { safeJsonFromGroq } from '../services/llm/safe-json.js';
-import { buildUserProfileContext } from './context-builders.js';
+import { asUntrustedContent, buildUserProfileContext } from './context-builders.js';
 
 function isLikelyTrivialMessage(content) {
   const text = String(content || '').trim();
@@ -74,10 +74,10 @@ channel:
 ${channelName}
 
 message:
-${content}
+${asUntrustedContent('discord_message', content)}
 
 userProfile:
-${buildUserProfileContext()}
+${asUntrustedContent('user_profile', buildUserProfileContext())}
 `;
 
   const parsed = await safeJsonFromGroq(systemPrompt, userPrompt, {
@@ -111,10 +111,10 @@ export async function classifyTaskType(messageContent) {
 
   const userPrompt = `
 message:
-${messageContent}
+${asUntrustedContent('discord_message', messageContent)}
 
 userProfile:
-${buildUserProfileContext()}
+${asUntrustedContent('user_profile', buildUserProfileContext())}
 `;
 
   const parsed = await safeJsonFromGroq(systemPrompt, userPrompt, {

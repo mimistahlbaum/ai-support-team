@@ -1,7 +1,7 @@
 import { searchTavily } from '../services/search/tavily-search.js';
 import { notionSearch, formatNotionSearchResults } from '../services/search/notion-search.js';
 import { taskTypeHint } from '../domain/decision-model.js';
-import { buildHistoryContext, buildUserProfileContext } from '../orchestration/context-builders.js';
+import { asUntrustedContent, buildHistoryContext, buildUserProfileContext } from '../orchestration/context-builders.js';
 import { askScoutSearchDecision } from './scout/judge-search.js';
 import { touchTask } from '../domain/task-model.js';
 import { runSpark } from './spark/run-spark.js';
@@ -12,16 +12,20 @@ export async function askAgentResponse(role, instruction, task, mode) {
   const basePrompt = `
 タスク種別:\n${task.taskType}
 補足:\n${taskTypeHint(task.taskType)}
-ユーザープロフィール:\n${buildUserProfileContext()}
-圧縮された過去要約:\n${task.historySummary || 'No summary.'}
-過去ログ:\n${buildHistoryContext(task.channelId, 10)}
-Scout の検索結果:\n${task.scoutEvidence || '検索なし'}
-Coordinator instruction:\n${instruction}
+ユーザープロフィール:\n${asUntrustedContent('user_profile', buildUserProfileContext())}
+圧縮された過去要約:\n${asUntrustedContent('history_summary', task.historySummary || 'No summary.')}
+過去ログ:\n${asUntrustedContent('recent_history', buildHistoryContext(task.channelId, 10))}
+Scout の検索結果:\n${asUntrustedContent('scout_evidence', task.scoutEvidence || '検索なし')}
+Coordinator instruction:\n${asUntrustedContent('coordinator_instruction', instruction)}
 現在モード:\n${mode}
 `;
 
   if (role === 'Scout') {
-    const decision = await askScoutSearchDecision(task.taskType, `${task.prompt}\n\nCoordinator instruction:\n${instruction}`, task.scoutEvidence || '');
+    const decision = await askScoutSearchDecision(
+      task.taskType,
+      `${task.prompt}\n\nCoordinator instruction:\n${instruction}`,
+      task.scoutEvidence || ''
+    );
 
     let finalText = `検索判断:\nneedSearch: ${decision.needSearch}\nneedFreshSearch: ${decision.needFreshSearch}\ncanUseExistingEvidence: ${decision.canUseExistingEvidence}\nconfidence: ${decision.confidence}\nreason: ${decision.reason}\nquery: ${decision.query || '(none)'}`;
 
