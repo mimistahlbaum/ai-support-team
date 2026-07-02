@@ -22,7 +22,8 @@ function isLikelyTrivialMessage(content) {
   ]);
   if (trivial.has(lower)) return true;
 
-  const emojiOnly = /^[\p{Emoji}\p{Extended_Pictographic}\s]+$/u.test(text);
+  // \p{Emoji} would also match plain digits, so restrict to pictographic emoji.
+  const emojiOnly = /^[\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{20E3}\s]+$/u.test(text);
   if (emojiOnly) return true;
 
   const urlOnly = /^(https?:\/\/\S+\s*)+$/i.test(text);

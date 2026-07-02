@@ -1,17 +1,26 @@
 {
   "name": "ai-support-team",
   "version": "1.0.0",
-  "description": "",
+  "description": "Reusable multi-agent Discord support system for independent artists and small creative teams",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "render-start": "node index.js",
-    "migrate:supabase": "node migrate-local-to-supabase.js"
+    "migrate:supabase": "node migrate-local-to-supabase.js",
+    "test": "node --test \"test/*.test.js\""
   },
-  "keywords": [],
+  "keywords": [
+    "discord",
+    "multi-agent",
+    "assistant",
+    "creative-teams"
+  ],
   "author": "",
   "license": "ISC",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@notionhq/client": "^5.17.0",
     "@supabase/supabase-js": "^2.103.0",

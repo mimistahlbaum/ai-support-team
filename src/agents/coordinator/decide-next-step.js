@@ -45,8 +45,10 @@ export async function askCoordinatorNextStep(task, latestUserPrompt, turnCount) 
     }
   );
 
+  const allowedSpeakers = ['Scout', 'Spark', 'Forge', 'Mirror', 'none'];
+
   return {
-    nextSpeaker: parsed.nextSpeaker || 'none',
+    nextSpeaker: allowedSpeakers.includes(parsed.nextSpeaker) ? parsed.nextSpeaker : 'none',
     taskComplete: Boolean(parsed.taskComplete),
     mode: parsed.mode === 'execution' ? 'execution' : 'discussion',
     reason: parsed.reason || 'No reason provided.',
