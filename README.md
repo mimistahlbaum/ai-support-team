@@ -78,10 +78,20 @@ See `.env.example` for full details and defaults.
 
 ## Local setup
 
+Requires Node.js 20 or newer.
+
 ```bash
 npm install
 cp .env.example .env
 npm start
+```
+
+### Tests
+
+The test suite covers utilities, task/domain logic, orchestration queueing, routing prefilters and health monitoring. It needs no external services or real credentials:
+
+```bash
+npm test
 ```
 
 ### Supabase table setup

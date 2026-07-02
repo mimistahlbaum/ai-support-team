@@ -1,18 +1,14 @@
-import pkg from 'discord.js';
+import { Status } from 'discord.js';
 import {
   ALERT_COOLDOWN_MS,
   HEALTHCHECK_INTERVAL_MS,
   HEALTHCHECK_MAX_STALE_MS,
 } from './constants.js';
 
-const { WebSocketStatus } = pkg;
-const WS_READY =
-  WebSocketStatus?.Ready ??
-  WebSocketStatus?.READY ??
-  0;
+const WS_READY = Status?.Ready ?? 0;
 
 const STATUS_LABELS = Object.fromEntries(
-  Object.entries(WebSocketStatus)
+  Object.entries(Status ?? {})
     .filter(([, value]) => typeof value === 'number')
     .map(([key, value]) => [value, key])
 );

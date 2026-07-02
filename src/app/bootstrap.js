@@ -9,6 +9,7 @@ import { API_RETRIES, REQUEST_TIMEOUT_MS } from './constants.js';
 import { retryAsync } from '../utils/retry.js';
 import { withTimeout } from '../utils/timeout.js';
 import { formatError } from '../utils/errors.js';
+import { sleep } from '../utils/time.js';
 import { loadTaskMemory, flushTaskMemory } from '../services/storage/task-repository.js';
 import { loadUserProfile, saveUserProfile } from '../services/storage/user-profile-repository.js';
 import { saveState, getIsShuttingDown, setIsShuttingDown } from '../state/runtime-state.js';
@@ -42,12 +43,18 @@ export function registerGracefulShutdown({ clients, healthServer, healthMonitor 
 
     await Promise.allSettled(clients.map(client => client.destroy()));
 
-    await new Promise(resolve => {
-      healthServer.close(() => {
-        console.log('[shutdown] health server closed.');
-        resolve();
-      });
-    });
+    // Open keep-alive connections can stall close(); do not block shutdown on them.
+    await Promise.race([
+      new Promise(resolve => {
+        healthServer.close(() => {
+          console.log('[shutdown] health server closed.');
+          resolve();
+        });
+      }),
+      sleep(5000).then(() => {
+        console.warn('[shutdown] health server close timed out; exiting anyway.');
+      }),
+    ]);
     process.exit(0);
   }
 
