@@ -2,7 +2,7 @@
 
 A small kit for independent artists who want an AI chat assistant (Claude or ChatGPT) to help with admin, without setting up any software.
 
-It comes from running the admin of an independent ballet collective in South Australia with AI assistants. The main lesson: what saves time is not more AI conversation. It is a few clear records and a few firm rules.
+It comes from experience as an independent artist doing admin with AI assistants. The main lesson: what saves time is not more AI conversation. It is a few clear records and a few firm rules.
 
 ## What you get
 
