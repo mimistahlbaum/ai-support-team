@@ -1,166 +1,42 @@
 # AI Support Team
 
-AI Support Team is a reusable multi-agent support system for independent artists and small creative teams.
+A small kit for independent artists who want an AI chat assistant (Claude or ChatGPT) to help with admin, without setting up any software.
 
-It uses a Discord-first workflow to turn everyday messages into structured support for admin, research, planning, drafting, coordination, and creative operations.
+It comes from experience as an independent artist doing admin with AI assistants. The main lesson: what saves time is not more AI conversation. It is a few clear records and a few firm rules.
 
-## Who this is for
+## What you get
 
-- dancers
-- choreographers
-- musicians
-- theatre makers
-- visual artists
-- producers
-- interdisciplinary artists
-- small collectives
-- small arts organisations
+- **Three spreadsheet templates** to import into Google Sheets (or Excel):
+  - **Opportunities**: grants, residencies, auditions and open calls, with what happened to each one
+  - **Deadlines**: what you must send, submit or answer by when
+  - **Contacts**: the people and organisations you work with, and who is waiting on whom
+- **Instructions for your AI assistant** that you paste in once. They set the rules: it drafts but never sends, it never invents dates or amounts and it marks what is checked and what is not.
+- **Five short routines** that you paste into the chat when you need them, such as a 15-minute weekly check or sorting a pile of emails.
 
-## What it helps with
+## Who it is for
 
-- turning ideas or requests into actionable task channels
-- coordinating role-based AI support across multiple specialist agents
-- drafting outlines, summaries, and next-step plans
-- maintaining shared task memory and user profile context
-- tracking service health for long-running operations
+Dancers, choreographers, musicians, theatre makers, visual artists, producers and small collectives who do their own admin. You need:
 
-## Architecture (current, lightweight)
+- a Google account (for Sheets), or Excel
+- an AI chat assistant: Claude or ChatGPT
+- about 20 minutes to set up
 
-This repo keeps the existing architecture and agent roles:
+No coding, no servers and no API keys.
 
-- **Scout**: gathers and checks context
-- **Spark**: proposes ideas and directions
-- **Forge**: develops practical output
-- **Mirror**: critiques and reflects
-- **Coordinator**: routes, decides next step, and posts final summary
+## What it does not do
 
-Core flow:
+- It does not send emails, submit applications, pay, sign or agree to anything. You do those yourself.
+- It does not remind you by itself. The sheets are the memory and the weekly routine is the reminder.
+- It does not treat what it cannot see as fact. An open call's deadline stays "Not checked" until someone reads it on the organiser's own page.
 
-1. Discord message or slash command starts/resumes a task.
-2. Coordinator orchestrates multi-agent turns.
-3. Task state/history are persisted in Supabase (`bot_storage`).
-4. Health server exposes `GET /`, `GET /health`, `GET /ready`.
+## Start here
 
-## Required services / accounts
+Open [kit/1-start-here.md](kit/1-start-here.md).
 
-You need:
+## Status
 
-- a Discord server (guild) you can manage
-- 5 Discord bot applications (Scout, Spark, Forge, Mirror, Coordinator)
-- Groq API key
-- Tavily API key
-- Notion API key
-- Supabase project (table: `bot_storage`)
+First version, November 2026.
 
-Optional:
+## Licence
 
-- Discord webhook URL for health/crash alerts
-- Render (or any Node.js host) for deployment
-- Docker-compatible host for container deployment
-
-## Environment variables
-
-Copy `.env.example` to `.env` and fill required values.
-
-Required groups:
-
-- Discord IDs/tokens for all 5 agents
-- External API keys: `GROQ_API_KEY`, `TAVILY_API_KEY`, `NOTION_KEY`
-- Storage: `SUPABASE_URL`, `SUPABASE_ANON_KEY`
-
-Optional groups:
-
-- `TASK_ADMIN_ROLE_ID`
-- `PORT`
-- health alert/monitor tuning vars
-
-See `.env.example` for full details and defaults.
-
-## Local setup
-
-Requires Node.js 20 or newer.
-
-```bash
-npm install
-cp .env.example .env
-npm start
-```
-
-### Tests
-
-The test suite covers utilities, task/domain logic, orchestration queueing, routing prefilters and health monitoring. It needs no external services or real credentials:
-
-```bash
-npm test
-```
-
-### Supabase table setup
-
-```sql
-create table if not exists bot_storage (
-  key text primary key,
-  value jsonb not null,
-  updated_at timestamptz not null default now()
-);
-```
-
-### Optional migration from local JSON files
-
-```bash
-npm run migrate:supabase
-```
-
-This reads `task_memory.json` / `user_profile.json` only if they exist.
-
-## Deployment options
-
-### Option A: Render
-
-Use `render.yaml` as a baseline, or configure manually:
-
-- Build command: `npm install --omit=dev`
-- Start command: `npm run render-start` (or `npm start`)
-- Health check path: `/health`
-
-### Option B: Docker / docker-compose
-
-```bash
-docker compose up -d --build
-docker compose logs -f
-docker compose down
-```
-
-### Option C: Any Node.js host
-
-Any host that supports long-running Node processes and environment variables can run this project.
-
-## Customising for another artist or team
-
-You can adapt this template without changing core architecture:
-
-- edit prompt files under `src/agents/**/prompts.js`
-- adjust slash command workflows in `src/discord/**`
-- tune orchestration rules in `src/orchestration/**`
-- set role access rules with `TASK_ADMIN_ROLE_ID`
-- update deployment metadata (`render.yaml`, compose service name) to your own project name
-
-## Privacy and security notes
-
-- Never commit `.env` or real API keys/tokens.
-- Keep Discord bot permissions minimal for your use case.
-- Restrict Supabase policies appropriately if using RLS.
-- Health alerts can include operational metadata (service state, uptime); send only to trusted channels.
-
-## Current limitations
-
-- Requires 5 bot tokens/client IDs (setup effort is non-trivial).
-- No built-in web UI; operations are Discord-first.
-- Supabase schema is intentionally minimal (`bot_storage` key/value model).
-- If required env vars are missing, startup exits immediately.
-
-## Troubleshooting quick notes
-
-- `Missing required env vars.` → check `.env` against `.env.example`.
-- Supabase connection errors → verify URL/key/table/policies.
-- Discord login issues → verify token/client ID pairing, bot invite permissions, intents.
-- Slash command registration issues → verify `COORDINATOR_CLIENT_ID` and `DISCORD_GUILD_ID`.
+This kit is licensed under [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/). You may share and adapt it, including for commercial use, as long as you give credit and link to this repository. The full text is in [LICENSE](LICENSE).
