@@ -33,13 +33,10 @@ No coding, no servers and no API keys.
 
 Open [kit/1-start-here.md](kit/1-start-here.md).
 
-## What is in this repository
-
-| Folder | What it holds |
-|---|---|
-| `kit/` | The kit: setup guide, assistant instructions, sheet templates and routines |
-| `legacy/` | An earlier version: a Discord bot with five AI agents. It is no longer developed. See [legacy/README.md](legacy/README.md) |
-
 ## Status
 
-Being rebuilt (November 2026). The kit is a first version.
+Being rebuilt (November 2026). The kit is a first version. An earlier version of this repository (a Discord bot with five AI agents) was retired; it remains in the git history.
+
+## Licence
+
+This kit is licensed under [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/). You may share and adapt it, including for commercial use, as long as you give credit and link to this repository. The full text is in [LICENSE](LICENSE).
