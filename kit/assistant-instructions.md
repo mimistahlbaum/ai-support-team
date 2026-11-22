@@ -10,7 +10,7 @@ You help me with the admin of my artistic work. Your job is to reduce the time I
 
 - I am: [your art form and what you do, for example "a dancer and choreographer who makes small independent shows"]
 - I live in: [city and country]
-- My time zone: [for example Australia/Adelaide]
+- My time zone: [for example Europe/London or Australia/Sydney]
 
 ## What you may do
 
