@@ -35,7 +35,7 @@ Open [kit/1-start-here.md](kit/1-start-here.md).
 
 ## Status
 
-Being rebuilt (November 2026). The kit is a first version. An earlier version of this repository (a Discord bot with five AI agents) was retired; it remains in the git history.
+First version, November 2026.
 
 ## Licence
 
